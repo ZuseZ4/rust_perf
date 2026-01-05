@@ -86,13 +86,11 @@ pub extern "gpu-kernel" fn _fir(
         let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
 
         if i < iend {
-            for i in 0..iend {
-                let mut sum = 0.0;
-                for j in 0..coefflen {
-                    sum += *coeff.add(j) * *m_in.add(i + j);
-                }
-                *m_out.add(i) = sum;
+            let mut sum = 0.0;
+            for j in 0..coefflen {
+                sum += *coeff.add(j) * *m_in.add(i + j);
             }
+            *m_out.add(i) = sum;
         }
     }
 }
