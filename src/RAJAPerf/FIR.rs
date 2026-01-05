@@ -36,7 +36,10 @@ unsafe extern "C" {
 #[unsafe(no_mangle)]
 #[inline(never)]
 fn main() {
-    let m_in: [f64; 4] = [1.0, 2.0, 3.0, 4.0];
+    let m_in: [f64; 20] = [
+        1.0, 2.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0,
+    ];
     let mut m_out: [f64; 4] = [0.0, 0.0, 0.0, 0.0];
     let coeff = [
         3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0,
@@ -62,7 +65,7 @@ unsafe fn fir(m_out: *mut f64, m_in: *const f64, coeff: *const f64, coefflen: us
         _fir,
         [256, 1, 1],
         [32, 1, 1],
-        (m_in, m_out, coeff, coefflen, iend),
+        (m_out, m_in, coeff, coefflen, iend),
     )
 }
 
