@@ -3,6 +3,7 @@
 #![feature(link_llvm_intrinsics)]
 #![feature(rustc_attrs)]
 #![feature(core_intrinsics)]
+#![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![no_std]
 
 #[cfg(target_os = "linux")]
@@ -13,25 +14,20 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+#[cfg(target_arch = "nvptx64")]
+use core::arch::nvptx::_block_dim_x as block_dim_x;
+#[cfg(target_arch = "nvptx64")]
+use core::arch::nvptx::_block_idx_x as block_idx_x;
+#[cfg(target_arch = "nvptx64")]
+use core::arch::nvptx::_thread_idx_x as thread_idx_x;
+
+#[cfg(target_arch = "amdgpu")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    #[cfg(target_arch = "nvptx64")]
-    #[link_name = "llvm.nvvm.read.ptx.sreg.ntid.x"]
-    fn block_dim_x() -> i32;
-    #[cfg(target_arch = "nvptx64")]
-    #[link_name = "llvm.nvvm.read.ptx.sreg.tid.x"]
-    fn thread_idx_x() -> i32;
-    #[cfg(target_arch = "nvptx64")]
-    #[link_name = "llvm.nvvm.read.ptx.sreg.ctaid.x"]
-    fn block_idx_x() -> i32;
-
-    #[cfg(target_arch = "amdgpu")]
     #[link_name = "llvm.amdgcn.workitem.id.x"]
     fn thread_idx_x() -> i32;
-    #[cfg(target_arch = "amdgpu")]
     #[link_name = "llvm.amdgcn.workgroup.id.x"]
     fn block_idx_x() -> i32;
-    #[cfg(target_arch = "amdgpu")]
     #[link_name = "llvm.amdgcn.workgroup.size.x"]
     fn block_dim_x() -> i32;
 }
@@ -67,7 +63,7 @@ unsafe fn main() {
     let iend: usize = 4;
 
     unsafe {
-        kernel(
+        del_dot_vec_2d(
             div.as_mut_ptr(),
             x1.as_ptr(),
             x2.as_ptr(),
@@ -94,7 +90,7 @@ unsafe fn main() {
 }
 
 #[inline(never)]
-unsafe fn kernel(
+unsafe fn del_dot_vec_2d(
     div: *mut f32,
     x1: *const f32,
     x2: *const f32,
@@ -118,7 +114,9 @@ unsafe fn kernel(
     iend: usize,
 ) {
     core::intrinsics::offload(
-        kernel_1,
+        _del_dot_vec_2d,
+        [256, 1, 1],
+        [32, 1, 1],
         (
             div, x1, x2, x3, x4, y1, y2, y3, y4, fx1, fx2, fx3, fx4, fy1, fy2, fy3, fy4,
             real_zones, half, ptiny, iend,
@@ -128,7 +126,7 @@ unsafe fn kernel(
 
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
-    pub fn kernel_1(
+    pub fn _del_dot_vec_2d(
         div: *mut f32,
         x1: *const f32,
         x2: *const f32,
@@ -157,7 +155,7 @@ unsafe extern "C" {
 #[unsafe(no_mangle)]
 #[inline(never)]
 #[rustc_offload_kernel]
-pub unsafe extern "gpu-kernel" fn kernel_1(
+pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
     div: *mut f32,
     x1: *const f32,
     x2: *const f32,

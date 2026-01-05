@@ -58,7 +58,12 @@ fn main() {
 #[cfg(target_os = "linux")]
 #[inline(never)]
 unsafe fn fir(m_out: *mut f64, m_in: *const f64, coeff: *const f64, coefflen: usize, iend: usize) {
-    core::intrinsics::offload(_fir, (m_in, m_out, coeff, coefflen, iend))
+    core::intrinsics::offload(
+        _fir,
+        [256, 1, 1],
+        [32, 1, 1],
+        (m_in, m_out, coeff, coefflen, iend),
+    )
 }
 
 #[cfg(target_os = "linux")]
