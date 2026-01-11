@@ -1,7 +1,7 @@
 Mean Runtime Report (sec.)  ,  ,  ,  ,  ,  ,  ,  ,  ,  ,  , 
-Variant              , Base_Seq , Lambda_Seq , RAJA_Seq , Base_OpenMP , Lambda_OpenMP , RAJA_OpenMP , Base_CUDA , Base_CUDA , Lambda_CUDA , RAJA_CUDA , RAJA_CUDA
-Tuning               , default  , default    , default  , default     , default       , default     , block_256 , block_64  , block_256   , block_256 , block_64 
-Apps_DEL_DOT_VEC_2D  , 0.881777 ,   0.865957 , 0.877724 ,    0.104467 ,      0.061635 ,    0.061468 ,  0.067575 ,   Not run ,    0.067544 ,  0.051280 ,   Not run
-Apps_ENERGY          , 1.813722 ,   1.828712 , 1.816735 ,    0.249957 ,      0.275249 ,    0.246429 ,  0.079553 ,   Not run ,     Not run ,  0.075080 ,   Not run
-Apps_FIR             , 0.925507 ,   0.943297 , 0.929278 ,    0.077015 ,      0.080203 ,    0.071970 ,  0.030254 ,   Not run ,     Not run ,  0.030295 ,   Not run
-Apps_MASS3DEA        , 0.070523 ,    Not run , 0.071903 ,    0.005155 ,       Not run ,    0.005515 ,   Not run ,  0.004995 ,     Not run ,   Not run ,  0.004931
+Variant              , Base_Seq , Lambda_Seq , RAJA_Seq , Base_OpenMP , Lambda_OpenMP , RAJA_OpenMP , Base_CUDA , Base_CUDA , Lambda_CUDA , RAJA_CUDA , RAJA_CUDA , Rust 
+Tuning               , default  , default    , default  , default     , default       , default     , block_256 , block_64  , block_256   , block_256 , block_64  , default
+Apps_DEL_DOT_VEC_2D  , 0.881777 ,   0.865957 , 0.877724 ,    0.104467 ,      0.061635 ,    0.061468 ,  0.067575 ,   Not run ,    0.067544 ,  0.051280 ,   Not run , 0.050691
+Apps_ENERGY          , 1.813722 ,   1.828712 , 1.816735 ,    0.249957 ,      0.275249 ,    0.246429 ,  0.079553 ,   Not run ,     Not run ,  0.075080 ,   Not run , 0.105792
+Apps_FIR             , 0.925507 ,   0.943297 , 0.929278 ,    0.077015 ,      0.080203 ,    0.071970 ,  0.030254 ,   Not run ,     Not run ,  0.030295 ,   Not run , 0.011658
+Apps_MASS3DEA        , 0.070523 ,    Not run , 0.071903 ,    0.005155 ,       Not run ,    0.005515 ,   Not run ,  0.004995 ,     Not run ,   Not run ,  0.004931 , 0.017920
