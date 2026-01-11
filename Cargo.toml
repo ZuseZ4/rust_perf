@@ -3,5 +3,16 @@ name = "rust_perf"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
-libc = "0.2.177"
+libc = { version = "0.2.175", default-features = false }
+
+[profile.release]
+lto = "fat"
+panic = "abort"
+
+[profile.dev]
+lto = "fat"
+panic = "abort"
