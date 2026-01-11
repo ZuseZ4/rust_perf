@@ -16,9 +16,9 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
-const MEA_D1D: usize = 5;
-const MEA_Q1D: usize = 10;
-const NE_VAL: usize = 2;
+const MEA_D1D: usize = 4;
+const MEA_Q1D: usize = 5;
+const NE_VAL: usize = 8_000;
 
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{

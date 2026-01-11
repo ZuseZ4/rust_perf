@@ -16,7 +16,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 
 const IEND: usize = 1_000_000;
 const COEFFLEN: usize = 16;
-const THREADS_PER_BLOCK: u32 = 32;
+const THREADS_PER_BLOCK: u32 = 256;
 const BLOCKS: u32 = (IEND as u32).div_ceil(THREADS_PER_BLOCK);
 
 #[cfg(target_arch = "nvptx64")]
