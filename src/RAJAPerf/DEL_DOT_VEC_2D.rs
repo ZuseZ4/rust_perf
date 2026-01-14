@@ -14,12 +14,17 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+const IEND: usize = 1_000_000;
+const HALF: f64 = 1.0;
+const PTINY: f64 = 0.001;
+const THREADS_PER_BLOCK: u32 = 256;
+const BLOCKS: u32 = (IEND as u32).div_ceil(THREADS_PER_BLOCK);
+
 #[cfg(target_arch = "nvptx64")]
-use core::arch::nvptx::_block_dim_x as block_dim_x;
-#[cfg(target_arch = "nvptx64")]
-use core::arch::nvptx::_block_idx_x as block_idx_x;
-#[cfg(target_arch = "nvptx64")]
-use core::arch::nvptx::_thread_idx_x as thread_idx_x;
+use core::arch::nvptx::{
+    _block_dim_x as block_dim_x, _block_idx_x as block_idx_x, _thread_idx_x as thread_idx_x,
+};
+use core::ptr;
 
 #[cfg(target_arch = "amdgpu")]
 #[allow(improper_ctypes)]
@@ -33,172 +38,199 @@ unsafe extern "C" {
 }
 
 #[cfg(target_os = "linux")]
-#[unsafe(no_mangle)]
-#[inline(never)]
-unsafe fn main() {
-    let mut div: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let x1: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let x2: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let x3: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let x4: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-
-    let y1: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let y2: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let y3: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let y4: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-
-    let fx1: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let fx2: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let fx3: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let fx4: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-
-    let fy1: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let fy2: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let fy3: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-    let fy4: [f32; 4] = [1.0, 2.0, 3.0, 4.0];
-
-    let real_zones: [usize; 4] = [0, 1, 2, 3];
-    let half: f32 = 1.0;
-    let ptiny: f32 = 0.001;
-    let iend: usize = 4;
-
-    unsafe {
-        del_dot_vec_2d(
-            div.as_mut_ptr(),
-            x1.as_ptr(),
-            x2.as_ptr(),
-            x3.as_ptr(),
-            x4.as_ptr(),
-            y1.as_ptr(),
-            y2.as_ptr(),
-            y3.as_ptr(),
-            y4.as_ptr(),
-            fx1.as_ptr(),
-            fx2.as_ptr(),
-            fx3.as_ptr(),
-            fx4.as_ptr(),
-            fy1.as_ptr(),
-            fy2.as_ptr(),
-            fy3.as_ptr(),
-            fy4.as_ptr(),
-            real_zones.as_ptr(),
-            half,
-            &ptiny,
-            iend,
-        )
-    };
+unsafe fn alloc_array<T>(len: usize) -> *mut T {
+    let size = len * core::mem::size_of::<T>();
+    let ptr = unsafe { libc::malloc(size) } as *mut T;
+    if ptr.is_null() {
+        panic!("libc malloc failed!");
+    }
+    ptr
 }
 
-#[inline(never)]
+#[cfg(target_os = "linux")]
+unsafe fn free_array<T>(ptr: *mut T) {
+    unsafe { libc::free(ptr as *mut libc::c_void) };
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn clock_gettime(clk_id: i32, tp: *mut Timespec) -> i32;
+}
+
+#[repr(C)]
+#[cfg(target_os = "linux")]
+#[derive(Debug, Copy, Clone)]
+struct Timespec {
+    tv_sec: libc::time_t,
+    tv_nsec: libc::c_long,
+}
+
+#[cfg(target_os = "linux")]
+const CLOCK_MONOTONIC: i32 = 1;
+
+#[cfg(target_os = "linux")]
+unsafe fn get_time_ns() -> u64 {
+    let mut ts = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe { clock_gettime(CLOCK_MONOTONIC, &mut ts) };
+    (ts.tv_sec as u64) * 1_000_000_000 + (ts.tv_nsec as u64)
+}
+
+#[cfg(target_os = "linux")]
+#[unsafe(no_mangle)]
+unsafe fn main() {
+    unsafe {
+        let div = alloc_array::<f64>(IEND);
+
+        let mut x = [ptr::null_mut(); 4];
+        let mut y = [ptr::null_mut(); 4];
+        let mut fx = [ptr::null_mut(); 4];
+        let mut fy = [ptr::null_mut(); 4];
+
+        for i in 0..4 {
+            x[i] = alloc_array::<f64>(IEND);
+            y[i] = alloc_array::<f64>(IEND);
+            fx[i] = alloc_array::<f64>(IEND);
+            fy[i] = alloc_array::<f64>(IEND);
+        }
+
+        let real_zones = alloc_array::<usize>(IEND);
+
+        let start = get_time_ns();
+        core::intrinsics::offload::<_, _, ()>(
+            _del_dot_vec_2d,
+            [BLOCKS, 1, 1],
+            [THREADS_PER_BLOCK, 1, 1],
+            (
+                div, x[0], x[1], x[2], x[3], y[0], y[1], y[2], y[3], fx[0], fx[1], fx[2], fx[3],
+                fy[0], fy[1], fy[2], fy[3], real_zones, HALF, PTINY, IEND,
+            ),
+        );
+        let end = get_time_ns();
+        let duration_ns = end - start;
+        let duration_s = duration_ns as f64 / 1_000_000_000.0;
+
+        libc::printf(c"%f\n".as_ptr(), duration_s);
+
+        free_array(div);
+        for i in 0..4 {
+            free_array(x[i]);
+            free_array(y[i]);
+            free_array(fx[i]);
+            free_array(fy[i]);
+        }
+        free_array(real_zones);
+    }
+}
+
 unsafe fn del_dot_vec_2d(
-    div: *mut f32,
-    x1: *const f32,
-    x2: *const f32,
-    x3: *const f32,
-    x4: *const f32,
-    y1: *const f32,
-    y2: *const f32,
-    y3: *const f32,
-    y4: *const f32,
-    fx1: *const f32,
-    fx2: *const f32,
-    fx3: *const f32,
-    fx4: *const f32,
-    fy1: *const f32,
-    fy2: *const f32,
-    fy3: *const f32,
-    fy4: *const f32,
-    real_zones: *const usize,
-    half: f32,
-    ptiny: *const f32,
+    div: *mut [f64; IEND],
+    x1: *const [f64; IEND],
+    x2: *const [f64; IEND],
+    x3: *const [f64; IEND],
+    x4: *const [f64; IEND],
+    y1: *const [f64; IEND],
+    y2: *const [f64; IEND],
+    y3: *const [f64; IEND],
+    y4: *const [f64; IEND],
+    fx1: *const [f64; IEND],
+    fx2: *const [f64; IEND],
+    fx3: *const [f64; IEND],
+    fx4: *const [f64; IEND],
+    fy1: *const [f64; IEND],
+    fy2: *const [f64; IEND],
+    fy3: *const [f64; IEND],
+    fy4: *const [f64; IEND],
+    real_zones: *const [usize; IEND],
+    half: f64,
+    ptiny: f64,
     iend: usize,
 ) {
     core::intrinsics::offload(
         _del_dot_vec_2d,
-        [256, 1, 1],
-        [32, 1, 1],
+        [BLOCKS, 1, 1],
+        [THREADS_PER_BLOCK, 1, 1],
         (
             div, x1, x2, x3, x4, y1, y2, y3, y4, fx1, fx2, fx3, fx4, fy1, fy2, fy3, fy4,
             real_zones, half, ptiny, iend,
         ),
     )
 }
-
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _del_dot_vec_2d(
-        div: *mut f32,
-        x1: *const f32,
-        x2: *const f32,
-        x3: *const f32,
-        x4: *const f32,
-        y1: *const f32,
-        y2: *const f32,
-        y3: *const f32,
-        y4: *const f32,
-        fx1: *const f32,
-        fx2: *const f32,
-        fx3: *const f32,
-        fx4: *const f32,
-        fy1: *const f32,
-        fy2: *const f32,
-        fy3: *const f32,
-        fy4: *const f32,
-        real_zones: *const usize,
-        half: f32,
-        ptiny: *const f32,
+        div: *mut [f64; IEND],
+        x1: *const [f64; IEND],
+        x2: *const [f64; IEND],
+        x3: *const [f64; IEND],
+        x4: *const [f64; IEND],
+        y1: *const [f64; IEND],
+        y2: *const [f64; IEND],
+        y3: *const [f64; IEND],
+        y4: *const [f64; IEND],
+        fx1: *const [f64; IEND],
+        fx2: *const [f64; IEND],
+        fx3: *const [f64; IEND],
+        fx4: *const [f64; IEND],
+        fy1: *const [f64; IEND],
+        fy2: *const [f64; IEND],
+        fy3: *const [f64; IEND],
+        fy4: *const [f64; IEND],
+        real_zones: *const [usize; IEND],
+        half: f64,
+        ptiny: f64,
         iend: usize,
     );
 }
 
 #[cfg(not(target_os = "linux"))]
 #[unsafe(no_mangle)]
-#[inline(never)]
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
-    div: *mut f32,
-    x1: *const f32,
-    x2: *const f32,
-    x3: *const f32,
-    x4: *const f32,
-    y1: *const f32,
-    y2: *const f32,
-    y3: *const f32,
-    y4: *const f32,
-    fx1: *const f32,
-    fx2: *const f32,
-    fx3: *const f32,
-    fx4: *const f32,
-    fy1: *const f32,
-    fy2: *const f32,
-    fy3: *const f32,
-    fy4: *const f32,
-    real_zones: *const usize,
-    half: f32,
-    ptiny: *const f32,
+    div: *mut [f64; IEND],
+    x1: *const [f64; IEND],
+    x2: *const [f64; IEND],
+    x3: *const [f64; IEND],
+    x4: *const [f64; IEND],
+    y1: *const [f64; IEND],
+    y2: *const [f64; IEND],
+    y3: *const [f64; IEND],
+    y4: *const [f64; IEND],
+    fx1: *const [f64; IEND],
+    fx2: *const [f64; IEND],
+    fx3: *const [f64; IEND],
+    fx4: *const [f64; IEND],
+    fy1: *const [f64; IEND],
+    fy2: *const [f64; IEND],
+    fy3: *const [f64; IEND],
+    fy4: *const [f64; IEND],
+    real_zones: *const [usize; IEND],
+    half: f64,
+    ptiny: f64,
     iend: usize,
 ) {
     unsafe {
         let ii = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
-
         if ii < iend {
-            let i = *real_zones.add(ii);
+            let i = (*real_zones)[ii];
 
-            let xi = half * (*x1.add(i) + *x2.add(i) - *x3.add(i) - *x4.add(i));
-            let xj = half * (*x2.add(i) + *x3.add(i) - *x4.add(i) - *x1.add(i));
-            let yi = half * (*y1.add(i) + *y2.add(i) - *y3.add(i) - *y4.add(i));
-            let yj = half * (*y2.add(i) + *y3.add(i) - *y4.add(i) - *y1.add(i));
-            let fxi = half * (*fx1.add(i) + *fx2.add(i) - *fx3.add(i) - *fx4.add(i));
-            let fxj = half * (*fx2.add(i) + *fx3.add(i) - *fx4.add(i) - *fx1.add(i));
-            let fyi = half * (*fy1.add(i) + *fy2.add(i) - *fy3.add(i) - *fy4.add(i));
-            let fyj = half * (*fy2.add(i) + *fy3.add(i) - *fy4.add(i) - *fy1.add(i));
+            let xi = half * ((*x1)[i] + (*x2)[i] - (*x3)[i] - (*x4)[i]);
+            let xj = half * ((*x2)[i] + (*x3)[i] - (*x4)[i] - (*x1)[i]);
+            let yi = half * ((*y1)[i] + (*y2)[i] - (*y3)[i] - (*y4)[i]);
+            let yj = half * ((*y2)[i] + (*y3)[i] - (*y4)[i] - (*y1)[i]);
+            let fxi = half * ((*fx1)[i] + (*fx2)[i] - (*fx3)[i] - (*fx4)[i]);
+            let fxj = half * ((*fx2)[i] + (*fx3)[i] - (*fx4)[i] - (*fx1)[i]);
+            let fyi = half * ((*fy1)[i] + (*fy2)[i] - (*fy3)[i] - (*fy4)[i]);
+            let fyj = half * ((*fy2)[i] + (*fy3)[i] - (*fy4)[i] - (*fy1)[i]);
 
-            let rarea = 1.0 / (xi * yj - xj * yi + *ptiny);
+            let rarea = 1.0 / (xi * yj - xj * yi + ptiny);
             let dfxdx = rarea * (fxi * yj - fxj * yi);
             let dfydy = rarea * (fyj * xi - fyi * xj);
-            let affine = (*fy1.add(i) + *fy2.add(i) + *fy3.add(i) + *fy4.add(i))
-                / (*y1.add(i) + *y2.add(i) + *y3.add(i) + *y4.add(i));
-            *div.add(i) = dfxdx + dfydy + affine;
+            let affine = ((*fy1)[i] + (*fy2)[i] + (*fy3)[i] + (*fy4)[i])
+                / ((*y1)[i] + (*y2)[i] + (*y3)[i] + (*y4)[i]);
+            (*div)[i] = dfxdx + dfydy + affine;
         }
     }
 }

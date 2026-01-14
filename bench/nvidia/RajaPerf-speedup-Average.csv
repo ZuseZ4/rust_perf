@@ -1,0 +1,7 @@
+Mean Speedup Report (T_ref/T_var): ref var = Base_Seq  ,  ,  ,  ,  ,  ,  ,  ,  ,  ,  , 
+Variant              , Base_Seq , Lambda_Seq , RAJA_Seq , Base_OpenMP , Lambda_OpenMP , RAJA_OpenMP , Base_CUDA , Base_CUDA , Lambda_CUDA , RAJA_CUDA , RAJA_CUDA, Rust
+Tuning               , default  , default    , default  , default     , default       , default     , block_256 , block_64  , block_256   , block_256 , block_64 , default
+Apps_DEL_DOT_VEC_2D  ,    1.000 ,      1.018 ,    1.005 ,       8.441 ,        14.306 ,      14.345 ,    13.049 ,   Not run ,      13.055 ,    17.195 ,   Not run, 17.395
+Apps_ENERGY          ,    1.000 ,      0.992 ,    0.998 ,       7.256 ,         6.589 ,       7.360 ,    22.799 ,   Not run ,     Not run ,    24.157 ,   Not run, 17.144
+Apps_FIR             ,    1.000 ,      0.981 ,    0.996 ,      12.017 ,        11.540 ,      12.860 ,    30.591 ,   Not run ,     Not run ,    30.549 ,   Not run, 79.388
+Apps_MASS3DEA        ,    1.000 ,    Not run ,    0.981 ,      13.679 ,       Not run ,      12.787 ,   Not run ,    14.118 ,     Not run ,   Not run ,    14.301,  3.935
