@@ -5,6 +5,7 @@
 #![feature(rustc_attrs)]
 #![feature(link_llvm_intrinsics)]
 #![feature(core_intrinsics)]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![no_std]
 
@@ -26,14 +27,13 @@ use core::arch::nvptx::{
 };
 
 #[cfg(target_arch = "amdgpu")]
+use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
+
+#[cfg(target_arch = "amdgpu")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    #[link_name = "llvm.amdgcn.workitem.id.x"]
-    fn thread_idx_x() -> i32;
-    #[link_name = "llvm.amdgcn.workgroup.id.x"]
-    fn block_idx_x() -> i32;
     #[link_name = "llvm.amdgcn.workgroup.size.x"]
-    fn block_dim_x() -> i32;
+    fn block_dim_x() -> u32;
 }
 
 #[cfg(target_os = "linux")]
@@ -201,7 +201,6 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc1(
     e_new: *mut [f64; IEND],
     e_old: *const [f64; IEND],
@@ -256,7 +255,6 @@ pub extern "gpu-kernel" fn _energycalc1(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc2(
     delvc: *const [f64; IEND],
     q_new: *mut [f64; IEND],
@@ -345,7 +343,6 @@ pub extern "gpu-kernel" fn _energycalc2(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc3(
     e_new: *mut [f64; IEND],
     delvc: *const [f64; IEND],
@@ -401,7 +398,6 @@ pub extern "gpu-kernel" fn _energycalc3(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc4(
     e_new: *mut [f64; IEND],
     work: *const [f64; IEND],
@@ -454,7 +450,6 @@ pub extern "gpu-kernel" fn _energycalc4(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc5(
     delvc: *const [f64; IEND],
     pbvc: *const [f64; IEND],
@@ -568,7 +563,6 @@ pub extern "gpu-kernel" fn _energycalc5(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc6(
     delvc: *const [f64; IEND],
     pbvc: *const [f64; IEND],

@@ -3,6 +3,7 @@
 #![feature(link_llvm_intrinsics)]
 #![feature(rustc_attrs)]
 #![feature(core_intrinsics)]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![no_std]
 
@@ -27,14 +28,13 @@ use core::arch::nvptx::{
 use core::ptr;
 
 #[cfg(target_arch = "amdgpu")]
+use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
+
+#[cfg(target_arch = "amdgpu")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    #[link_name = "llvm.amdgcn.workitem.id.x"]
-    fn thread_idx_x() -> i32;
-    #[link_name = "llvm.amdgcn.workgroup.id.x"]
-    fn block_idx_x() -> i32;
     #[link_name = "llvm.amdgcn.workgroup.size.x"]
-    fn block_dim_x() -> i32;
+    fn block_dim_x() -> u32;
 }
 
 #[cfg(target_os = "linux")]

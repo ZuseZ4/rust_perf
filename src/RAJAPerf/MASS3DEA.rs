@@ -5,6 +5,7 @@
 #![feature(rustc_attrs)]
 #![feature(core_intrinsics)]
 #![feature(asm_experimental_arch)]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![no_std]
 

@@ -3,6 +3,7 @@
 #![feature(link_llvm_intrinsics)]
 #![feature(rustc_attrs)]
 #![feature(core_intrinsics)]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![no_std]
 
