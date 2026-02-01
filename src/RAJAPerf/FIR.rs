@@ -103,8 +103,8 @@ unsafe fn main() {
             [THREADS_PER_BLOCK, 1, 1],
             (
                 m_out as *mut [f64; IEND],
-                m_in as *const [f64; IEND + COEFFLEN],
-                &coeff as *const [f64; COEFFLEN],
+                m_in as &[f64; IEND + COEFFLEN],
+                &coeff as &[f64; COEFFLEN],
                 IEND,
             ),
         );
@@ -122,8 +122,8 @@ unsafe fn main() {
 unsafe extern "C" {
     pub fn _fir(
         m_out: *mut [f64; IEND],
-        m_in: *const [f64; IEND + COEFFLEN],
-        coeff: *const [f64; COEFFLEN],
+        m_in: &[f64; IEND + COEFFLEN],
+        coeff: &[f64; COEFFLEN],
         iend: usize,
     );
 }
@@ -133,8 +133,8 @@ unsafe extern "C" {
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _fir(
     m_out: *mut [f64; IEND],
-    m_in: *const [f64; IEND + COEFFLEN],
-    coeff: *const [f64; COEFFLEN],
+    m_in: &[f64; IEND + COEFFLEN],
+    coeff: &[f64; COEFFLEN],
     iend: usize,
 ) {
     let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
