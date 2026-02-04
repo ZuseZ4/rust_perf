@@ -5,6 +5,7 @@
 #![feature(rustc_attrs)]
 #![feature(link_llvm_intrinsics)]
 #![feature(core_intrinsics)]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![no_std]
 
@@ -26,24 +27,23 @@ use core::arch::nvptx::{
 };
 
 #[cfg(target_arch = "amdgpu")]
+use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
+
+#[cfg(target_arch = "amdgpu")]
 #[allow(improper_ctypes)]
 unsafe extern "C" {
-    #[link_name = "llvm.amdgcn.workitem.id.x"]
-    fn thread_idx_x() -> i32;
-    #[link_name = "llvm.amdgcn.workgroup.id.x"]
-    fn block_idx_x() -> i32;
     #[link_name = "llvm.amdgcn.workgroup.size.x"]
-    fn block_dim_x() -> i32;
+    fn block_dim_x() -> u32;
 }
 
 #[cfg(target_os = "linux")]
-unsafe fn alloc_array<T>(len: usize) -> *mut T {
+unsafe fn alloc_array<T>(len: usize) -> *mut [T; IEND] {
     let size = len * core::mem::size_of::<T>();
     let ptr = unsafe { libc::malloc(size) } as *mut T;
     if ptr.is_null() {
         panic!();
     }
-    ptr
+    ptr as *mut [T; IEND]
 }
 
 #[cfg(target_os = "linux")]
@@ -105,59 +105,53 @@ fn main() {
         let start = get_time_ns();
         energycalc1(
             e_new as *mut [f64; IEND],
-            e_old as *const [f64; IEND],
-            delvc as *const [f64; IEND],
-            p_old as *const [f64; IEND],
-            q_old as *const [f64; IEND],
-            work as *const [f64; IEND],
+            &*e_old,
+            &*delvc,
+            &*p_old,
+            &*q_old,
+            &*work,
             IEND,
         );
 
         energycalc2(
-            delvc as *const [f64; IEND],
+            &*delvc,
             q_new as *mut [f64; IEND],
-            compHalfStep as *const [f64; IEND],
-            pHalfStep as *const [f64; IEND],
+            &*compHalfStep,
+            &*pHalfStep,
             e_new as *mut [f64; IEND],
-            bvc as *const [f64; IEND],
-            pbvc as *const [f64; IEND],
-            ql_old as *const [f64; IEND],
-            qq_old as *const [f64; IEND],
+            &*bvc,
+            &*pbvc,
+            &*ql_old,
+            &*qq_old,
             rho0,
             IEND,
         );
 
         energycalc3(
             e_new as *mut [f64; IEND],
-            delvc as *const [f64; IEND],
-            p_old as *const [f64; IEND],
-            q_old as *const [f64; IEND],
-            pHalfStep as *const [f64; IEND],
-            q_new as *const [f64; IEND],
+            &*delvc,
+            &*p_old,
+            &*q_old,
+            &*pHalfStep,
+            &*q_new,
             IEND,
         );
 
-        energycalc4(
-            e_new as *mut [f64; IEND],
-            work as *const [f64; IEND],
-            e_cut,
-            emin,
-            IEND,
-        );
+        energycalc4(e_new as *mut [f64; IEND], &*work, e_cut, emin, IEND);
 
         energycalc5(
-            delvc as *const [f64; IEND],
-            pbvc as *const [f64; IEND],
+            &*delvc,
+            &*pbvc,
             e_new as *mut [f64; IEND],
-            vnewc as *const [f64; IEND],
-            bvc as *const [f64; IEND],
-            p_new as *const [f64; IEND],
-            ql_old as *const [f64; IEND],
-            qq_old as *const [f64; IEND],
-            p_old as *const [f64; IEND],
-            q_old as *const [f64; IEND],
-            pHalfStep as *const [f64; IEND],
-            q_new as *const [f64; IEND],
+            &*vnewc,
+            &*bvc,
+            &*p_new,
+            &*ql_old,
+            &*qq_old,
+            &*p_old,
+            &*q_old,
+            &*pHalfStep,
+            &*q_new,
             rho0,
             e_cut,
             emin,
@@ -165,15 +159,15 @@ fn main() {
         );
 
         energycalc6(
-            delvc as *const [f64; IEND],
-            pbvc as *const [f64; IEND],
+            &*delvc,
+            &*pbvc,
             e_new as *mut [f64; IEND],
-            vnewc as *const [f64; IEND],
-            bvc as *const [f64; IEND],
-            p_new as *const [f64; IEND],
+            &*vnewc,
+            &*bvc,
+            &*p_new,
             q_new as *mut [f64; IEND],
-            ql_old as *const [f64; IEND],
-            qq_old as *const [f64; IEND],
+            &*ql_old,
+            &*qq_old,
             rho0,
             q_cut,
             IEND,
@@ -201,14 +195,13 @@ fn main() {
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc1(
     e_new: *mut [f64; IEND],
-    e_old: *const [f64; IEND],
-    delvc: *const [f64; IEND],
-    p_old: *const [f64; IEND],
-    q_old: *const [f64; IEND],
-    work: *const [f64; IEND],
+    e_old: &[f64; IEND],
+    delvc: &[f64; IEND],
+    p_old: &[f64; IEND],
+    q_old: &[f64; IEND],
+    work: &[f64; IEND],
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -223,11 +216,11 @@ unsafe fn energycalc1(
 unsafe extern "C" {
     pub fn _energycalc1(
         e_new: *mut [f64; IEND],
-        e_old: *const [f64; IEND],
-        delvc: *const [f64; IEND],
-        p_old: *const [f64; IEND],
-        q_old: *const [f64; IEND],
-        work: *const [f64; IEND],
+        e_old: &[f64; IEND],
+        delvc: &[f64; IEND],
+        p_old: &[f64; IEND],
+        q_old: &[f64; IEND],
+        work: &[f64; IEND],
         iend: usize,
     );
 }
@@ -238,11 +231,11 @@ unsafe extern "C" {
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc1(
     e_new: *mut [f64; IEND],
-    e_old: *const [f64; IEND],
-    delvc: *const [f64; IEND],
-    p_old: *const [f64; IEND],
-    q_old: *const [f64; IEND],
-    work: *const [f64; IEND],
+    e_old: &[f64; IEND],
+    delvc: &[f64; IEND],
+    p_old: &[f64; IEND],
+    q_old: &[f64; IEND],
+    work: &[f64; IEND],
     iend: usize,
 ) {
     unsafe {
@@ -256,17 +249,16 @@ pub extern "gpu-kernel" fn _energycalc1(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc2(
-    delvc: *const [f64; IEND],
+    delvc: &[f64; IEND],
     q_new: *mut [f64; IEND],
-    compHalfStep: *const [f64; IEND],
-    pHalfStep: *const [f64; IEND],
+    compHalfStep: &[f64; IEND],
+    pHalfStep: &[f64; IEND],
     e_new: *mut [f64; IEND],
-    bvc: *const [f64; IEND],
-    pbvc: *const [f64; IEND],
-    ql_old: *const [f64; IEND],
-    qq_old: *const [f64; IEND],
+    bvc: &[f64; IEND],
+    pbvc: &[f64; IEND],
+    ql_old: &[f64; IEND],
+    qq_old: &[f64; IEND],
     rho0: f64,
     iend: usize,
 ) {
@@ -293,15 +285,15 @@ unsafe fn energycalc2(
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _energycalc2(
-        delvc: *const [f64; IEND],
+        delvc: &[f64; IEND],
         q_new: *mut [f64; IEND],
-        compHalfStep: *const [f64; IEND],
-        pHalfStep: *const [f64; IEND],
+        compHalfStep: &[f64; IEND],
+        pHalfStep: &[f64; IEND],
         e_new: *mut [f64; IEND],
-        bvc: *const [f64; IEND],
-        pbvc: *const [f64; IEND],
-        ql_old: *const [f64; IEND],
-        qq_old: *const [f64; IEND],
+        bvc: &[f64; IEND],
+        pbvc: &[f64; IEND],
+        ql_old: &[f64; IEND],
+        qq_old: &[f64; IEND],
         rho0: f64,
         iend: usize,
     );
@@ -312,15 +304,15 @@ unsafe extern "C" {
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc2(
-    delvc: *const [f64; IEND],
+    delvc: &[f64; IEND],
     q_new: *mut [f64; IEND],
-    compHalfStep: *const [f64; IEND],
-    pHalfStep: *const [f64; IEND],
+    compHalfStep: &[f64; IEND],
+    pHalfStep: &[f64; IEND],
     e_new: *mut [f64; IEND],
-    bvc: *const [f64; IEND],
-    pbvc: *const [f64; IEND],
-    ql_old: *const [f64; IEND],
-    qq_old: *const [f64; IEND],
+    bvc: &[f64; IEND],
+    pbvc: &[f64; IEND],
+    ql_old: &[f64; IEND],
+    qq_old: &[f64; IEND],
     rho0: f64,
     iend: usize,
 ) {
@@ -345,14 +337,13 @@ pub extern "gpu-kernel" fn _energycalc2(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc3(
     e_new: *mut [f64; IEND],
-    delvc: *const [f64; IEND],
-    p_old: *const [f64; IEND],
-    q_old: *const [f64; IEND],
-    pHalfStep: *const [f64; IEND],
-    q_new: *const [f64; IEND],
+    delvc: &[f64; IEND],
+    p_old: &[f64; IEND],
+    q_old: &[f64; IEND],
+    pHalfStep: &[f64; IEND],
+    q_new: &[f64; IEND],
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -367,11 +358,11 @@ unsafe fn energycalc3(
 unsafe extern "C" {
     pub fn _energycalc3(
         e_new: *mut [f64; IEND],
-        delvc: *const [f64; IEND],
-        p_old: *const [f64; IEND],
-        q_old: *const [f64; IEND],
-        pHalfStep: *const [f64; IEND],
-        q_new: *const [f64; IEND],
+        delvc: &[f64; IEND],
+        p_old: &[f64; IEND],
+        q_old: &[f64; IEND],
+        pHalfStep: &[f64; IEND],
+        q_new: &[f64; IEND],
         iend: usize,
     );
 }
@@ -382,11 +373,11 @@ unsafe extern "C" {
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc3(
     e_new: *mut [f64; IEND],
-    delvc: *const [f64; IEND],
-    p_old: *const [f64; IEND],
-    q_old: *const [f64; IEND],
-    pHalfStep: *const [f64; IEND],
-    q_new: *const [f64; IEND],
+    delvc: &[f64; IEND],
+    p_old: &[f64; IEND],
+    q_old: &[f64; IEND],
+    pHalfStep: &[f64; IEND],
+    q_new: &[f64; IEND],
     iend: usize,
 ) {
     unsafe {
@@ -401,10 +392,9 @@ pub extern "gpu-kernel" fn _energycalc3(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc4(
     e_new: *mut [f64; IEND],
-    work: *const [f64; IEND],
+    work: &[f64; IEND],
     e_cut: f64,
     emin: f64,
     iend: usize,
@@ -421,7 +411,7 @@ unsafe fn energycalc4(
 unsafe extern "C" {
     pub fn _energycalc4(
         e_new: *mut [f64; IEND],
-        work: *const [f64; IEND],
+        work: &[f64; IEND],
         e_cut: f64,
         emin: f64,
         iend: usize,
@@ -434,7 +424,7 @@ unsafe extern "C" {
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc4(
     e_new: *mut [f64; IEND],
-    work: *const [f64; IEND],
+    work: &[f64; IEND],
     e_cut: f64,
     emin: f64,
     iend: usize,
@@ -454,20 +444,19 @@ pub extern "gpu-kernel" fn _energycalc4(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc5(
-    delvc: *const [f64; IEND],
-    pbvc: *const [f64; IEND],
+    delvc: &[f64; IEND],
+    pbvc: &[f64; IEND],
     e_new: *mut [f64; IEND],
-    vnewc: *const [f64; IEND],
-    bvc: *const [f64; IEND],
-    p_new: *const [f64; IEND],
-    ql_old: *const [f64; IEND],
-    qq_old: *const [f64; IEND],
-    p_old: *const [f64; IEND],
-    q_old: *const [f64; IEND],
-    pHalfStep: *const [f64; IEND],
-    q_new: *const [f64; IEND],
+    vnewc: &[f64; IEND],
+    bvc: &[f64; IEND],
+    p_new: &[f64; IEND],
+    ql_old: &[f64; IEND],
+    qq_old: &[f64; IEND],
+    p_old: &[f64; IEND],
+    q_old: &[f64; IEND],
+    pHalfStep: &[f64; IEND],
+    q_new: &[f64; IEND],
     rho0: f64,
     e_cut: f64,
     emin: f64,
@@ -487,18 +476,18 @@ unsafe fn energycalc5(
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _energycalc5(
-        delvc: *const [f64; IEND],
-        pbvc: *const [f64; IEND],
+        delvc: &[f64; IEND],
+        pbvc: &[f64; IEND],
         e_new: *mut [f64; IEND],
-        vnewc: *const [f64; IEND],
-        bvc: *const [f64; IEND],
-        p_new: *const [f64; IEND],
-        ql_old: *const [f64; IEND],
-        qq_old: *const [f64; IEND],
-        p_old: *const [f64; IEND],
-        q_old: *const [f64; IEND],
-        pHalfStep: *const [f64; IEND],
-        q_new: *const [f64; IEND],
+        vnewc: &[f64; IEND],
+        bvc: &[f64; IEND],
+        p_new: &[f64; IEND],
+        ql_old: &[f64; IEND],
+        qq_old: &[f64; IEND],
+        p_old: &[f64; IEND],
+        q_old: &[f64; IEND],
+        pHalfStep: &[f64; IEND],
+        q_new: &[f64; IEND],
         rho0: f64,
         e_cut: f64,
         emin: f64,
@@ -511,18 +500,18 @@ unsafe extern "C" {
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc5(
-    delvc: *const [f64; IEND],
-    pbvc: *const [f64; IEND],
+    delvc: &[f64; IEND],
+    pbvc: &[f64; IEND],
     e_new: *mut [f64; IEND],
-    vnewc: *const [f64; IEND],
-    bvc: *const [f64; IEND],
-    p_new: *const [f64; IEND],
-    ql_old: *const [f64; IEND],
-    qq_old: *const [f64; IEND],
-    p_old: *const [f64; IEND],
-    q_old: *const [f64; IEND],
-    pHalfStep: *const [f64; IEND],
-    q_new: *const [f64; IEND],
+    vnewc: &[f64; IEND],
+    bvc: &[f64; IEND],
+    p_new: &[f64; IEND],
+    ql_old: &[f64; IEND],
+    qq_old: &[f64; IEND],
+    p_old: &[f64; IEND],
+    q_old: &[f64; IEND],
+    pHalfStep: &[f64; IEND],
+    q_new: &[f64; IEND],
     rho0: f64,
     e_cut: f64,
     emin: f64,
@@ -568,17 +557,16 @@ pub extern "gpu-kernel" fn _energycalc5(
 }
 
 #[cfg(target_os = "linux")]
-#[inline(never)]
 unsafe fn energycalc6(
-    delvc: *const [f64; IEND],
-    pbvc: *const [f64; IEND],
+    delvc: &[f64; IEND],
+    pbvc: &[f64; IEND],
     e_new: *mut [f64; IEND],
-    vnewc: *const [f64; IEND],
-    bvc: *const [f64; IEND],
-    p_new: *const [f64; IEND],
-    q_new: *const [f64; IEND],
-    ql_old: *const [f64; IEND],
-    qq_old: *const [f64; IEND],
+    vnewc: &[f64; IEND],
+    bvc: &[f64; IEND],
+    p_new: &[f64; IEND],
+    q_new: *mut [f64; IEND],
+    ql_old: &[f64; IEND],
+    qq_old: &[f64; IEND],
     rho0: f64,
     q_cut: f64,
     iend: usize,
@@ -596,15 +584,15 @@ unsafe fn energycalc6(
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _energycalc6(
-        delvc: *const [f64; IEND],
-        pbvc: *const [f64; IEND],
+        delvc: &[f64; IEND],
+        pbvc: &[f64; IEND],
         e_new: *mut [f64; IEND],
-        vnewc: *const [f64; IEND],
-        bvc: *const [f64; IEND],
-        p_new: *const [f64; IEND],
-        q_new: *const [f64; IEND],
-        ql_old: *const [f64; IEND],
-        qq_old: *const [f64; IEND],
+        vnewc: &[f64; IEND],
+        bvc: &[f64; IEND],
+        p_new: &[f64; IEND],
+        q_new: *mut [f64; IEND],
+        ql_old: &[f64; IEND],
+        qq_old: &[f64; IEND],
         rho0: f64,
         q_cut: f64,
         iend: usize,
@@ -616,15 +604,15 @@ unsafe extern "C" {
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc6(
-    delvc: *const [f64; IEND],
-    pbvc: *const [f64; IEND],
+    delvc: &[f64; IEND],
+    pbvc: &[f64; IEND],
     e_new: *mut [f64; IEND],
-    vnewc: *const [f64; IEND],
-    bvc: *const [f64; IEND],
-    p_new: *const [f64; IEND],
+    vnewc: &[f64; IEND],
+    bvc: &[f64; IEND],
+    p_new: &[f64; IEND],
     q_new: *mut [f64; IEND],
-    ql_old: *const [f64; IEND],
-    qq_old: *const [f64; IEND],
+    ql_old: &[f64; IEND],
+    qq_old: &[f64; IEND],
     rho0: f64,
     q_cut: f64,
     iend: usize,
