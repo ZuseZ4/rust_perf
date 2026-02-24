@@ -17,6 +17,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+const ITER: usize = 130;
 const IEND: usize = 1_000_000;
 const THREADS_PER_BLOCK: u32 = 256;
 const BLOCKS: u32 = (IEND as u32).div_ceil(THREADS_PER_BLOCK);
@@ -103,75 +104,77 @@ fn main() {
         let q_cut = 0.0;
 
         let start = get_time_ns();
-        energycalc1(
-            e_new as *mut [f64; IEND],
-            &*e_old,
-            &*delvc,
-            &*p_old,
-            &*q_old,
-            &*work,
-            IEND,
-        );
+        for _ in 0..ITER {
+            energycalc1(
+                e_new as *mut [f64; IEND],
+                &*e_old,
+                &*delvc,
+                &*p_old,
+                &*q_old,
+                &*work,
+                IEND,
+            );
 
-        energycalc2(
-            &*delvc,
-            q_new as *mut [f64; IEND],
-            &*compHalfStep,
-            &*pHalfStep,
-            e_new as *mut [f64; IEND],
-            &*bvc,
-            &*pbvc,
-            &*ql_old,
-            &*qq_old,
-            rho0,
-            IEND,
-        );
+            energycalc2(
+                &*delvc,
+                q_new as *mut [f64; IEND],
+                &*compHalfStep,
+                &*pHalfStep,
+                e_new as *mut [f64; IEND],
+                &*bvc,
+                &*pbvc,
+                &*ql_old,
+                &*qq_old,
+                rho0,
+                IEND,
+            );
 
-        energycalc3(
-            e_new as *mut [f64; IEND],
-            &*delvc,
-            &*p_old,
-            &*q_old,
-            &*pHalfStep,
-            &*q_new,
-            IEND,
-        );
+            energycalc3(
+                e_new as *mut [f64; IEND],
+                &*delvc,
+                &*p_old,
+                &*q_old,
+                &*pHalfStep,
+                &*q_new,
+                IEND,
+            );
 
-        energycalc4(e_new as *mut [f64; IEND], &*work, e_cut, emin, IEND);
+            energycalc4(e_new as *mut [f64; IEND], &*work, e_cut, emin, IEND);
 
-        energycalc5(
-            &*delvc,
-            &*pbvc,
-            e_new as *mut [f64; IEND],
-            &*vnewc,
-            &*bvc,
-            &*p_new,
-            &*ql_old,
-            &*qq_old,
-            &*p_old,
-            &*q_old,
-            &*pHalfStep,
-            &*q_new,
-            rho0,
-            e_cut,
-            emin,
-            IEND,
-        );
+            energycalc5(
+                &*delvc,
+                &*pbvc,
+                e_new as *mut [f64; IEND],
+                &*vnewc,
+                &*bvc,
+                &*p_new,
+                &*ql_old,
+                &*qq_old,
+                &*p_old,
+                &*q_old,
+                &*pHalfStep,
+                &*q_new,
+                rho0,
+                e_cut,
+                emin,
+                IEND,
+            );
 
-        energycalc6(
-            &*delvc,
-            &*pbvc,
-            e_new as *mut [f64; IEND],
-            &*vnewc,
-            &*bvc,
-            &*p_new,
-            q_new as *mut [f64; IEND],
-            &*ql_old,
-            &*qq_old,
-            rho0,
-            q_cut,
-            IEND,
-        );
+            energycalc6(
+                &*delvc,
+                &*pbvc,
+                e_new as *mut [f64; IEND],
+                &*vnewc,
+                &*bvc,
+                &*p_new,
+                q_new as *mut [f64; IEND],
+                &*ql_old,
+                &*qq_old,
+                rho0,
+                q_cut,
+                IEND,
+            );
+        }
         let end = get_time_ns();
         let duration_s = (end - start) as f64 / 1_000_000_000.0;
         libc::printf(c"%f\n".as_ptr(), duration_s);

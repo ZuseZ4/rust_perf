@@ -15,7 +15,10 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+const ITER: usize = 100;
 const IEND: usize = 1_000_000;
+const JP: usize = 1004;
+const NNALLS: usize = JP * JP;
 const HALF: f64 = 1.0;
 const PTINY: f64 = 0.001;
 const THREADS_PER_BLOCK: u32 = 256;
@@ -82,32 +85,50 @@ unsafe fn get_time_ns() -> u64 {
 #[unsafe(no_mangle)]
 unsafe fn main() {
     unsafe {
-        let div = alloc_array::<f64>(IEND);
-
-        let mut x = [ptr::null_mut(); 4];
-        let mut y = [ptr::null_mut(); 4];
-        let mut fx = [ptr::null_mut(); 4];
-        let mut fy = [ptr::null_mut(); 4];
-
-        for i in 0..4 {
-            x[i] = alloc_array::<f64>(IEND);
-            y[i] = alloc_array::<f64>(IEND);
-            fx[i] = alloc_array::<f64>(IEND);
-            fy[i] = alloc_array::<f64>(IEND);
-        }
-
+        let x_base = alloc_array::<f64>(NNALLS);
+        let y_base = alloc_array::<f64>(NNALLS);
+        let fx_base = alloc_array::<f64>(NNALLS);
+        let fy_base = alloc_array::<f64>(NNALLS);
+        let div = alloc_array::<f64>(NNALLS);
         let real_zones = alloc_array::<usize>(IEND);
 
+        let x4 = x_base;
+        let x1 = x4.add(1);
+        let x3 = x4.add(JP);
+        let x2 = x1.add(JP);
+
+        let y4 = y_base;
+        let y1 = y4.add(1);
+        let y3 = y4.add(JP);
+        let y2 = y1.add(JP);
+
+        let fx4 = fx_base;
+        let fx1 = fx4.add(1);
+        let fx3 = fx4.add(JP);
+        let fx2 = fx1.add(JP);
+
+        let fy4 = fy_base;
+        let fy1 = fy4.add(1);
+        let fy3 = fy4.add(JP);
+        let fy2 = fy1.add(JP);
+
+        let x = [x1, x2, x3, x4];
+        let y = [y1, y2, y3, y4];
+        let fx = [fx1, fx2, fx3, fx4];
+        let fy = [fy1, fy2, fy3, fy4];
+
         let start = get_time_ns();
-        core::intrinsics::offload::<_, _, ()>(
-            _del_dot_vec_2d,
-            [BLOCKS, 1, 1],
-            [THREADS_PER_BLOCK, 1, 1],
-            (
-                div, x[0], x[1], x[2], x[3], y[0], y[1], y[2], y[3], fx[0], fx[1], fx[2], fx[3],
-                fy[0], fy[1], fy[2], fy[3], real_zones, HALF, PTINY, IEND,
-            ),
-        );
+        for _ in 0..ITER {
+            core::intrinsics::offload::<_, _, ()>(
+                _del_dot_vec_2d,
+                [BLOCKS, 1, 1],
+                [THREADS_PER_BLOCK, 1, 1],
+                (
+                    div, x[0], x[1], x[2], x[3], y[0], y[1], y[2], y[3], fx[0], fx[1], fx[2],
+                    fx[3], fy[0], fy[1], fy[2], fy[3], real_zones, HALF, PTINY, IEND,
+                ),
+            );
+        }
         let end = get_time_ns();
         let duration_ns = end - start;
         let duration_s = duration_ns as f64 / 1_000_000_000.0;

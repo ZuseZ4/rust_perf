@@ -15,6 +15,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+const ITER: usize = 160;
 const IEND: usize = 1_000_000;
 const COEFFLEN: usize = 16;
 const THREADS_PER_BLOCK: u32 = 256;
@@ -84,30 +85,32 @@ unsafe fn get_time_ns() -> u64 {
 #[unsafe(no_mangle)]
 unsafe fn main() {
     unsafe {
-        let m_in = alloc_array::<f64>(IEND + COEFFLEN);
+        let m_in = alloc_array::<f64>(IEND + COEFFLEN) as *mut [f64; IEND + COEFFLEN];
         let m_out = alloc_array::<f64>(IEND);
         let coeff = [
             3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0,
             3.0,
         ];
 
-        *m_in.add(0) = 1.0;
-        *m_in.add(1) = 2.0;
-        *m_in.add(2) = 3.0;
-        *m_in.add(3) = 4.0;
+        (*m_in)[0] = 1.0;
+        (*m_in)[1] = 2.0;
+        (*m_in)[2] = 3.0;
+        (*m_in)[3] = 4.0;
 
         let start = get_time_ns();
-        core::intrinsics::offload::<_, _, ()>(
-            _fir,
-            [BLOCKS, 1, 1],
-            [THREADS_PER_BLOCK, 1, 1],
-            (
-                m_out as *mut [f64; IEND],
-                m_in as &[f64; IEND + COEFFLEN],
-                &coeff as &[f64; COEFFLEN],
-                IEND,
-            ),
-        );
+        for _ in 0..ITER {
+            core::intrinsics::offload::<_, _, ()>(
+                _fir,
+                [BLOCKS, 1, 1],
+                [THREADS_PER_BLOCK, 1, 1],
+                (
+                    m_out as *mut [f64; IEND],
+                    &*m_in as &[f64; IEND + COEFFLEN],
+                    &coeff as &[f64; COEFFLEN],
+                    IEND,
+                ),
+            );
+        }
         let end = get_time_ns();
 
         let duration_s = (end - start) as f64 / 1_000_000_000.0;

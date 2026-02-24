@@ -17,6 +17,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+const ITER: usize = 1;
 const MEA_D1D: usize = 4;
 const MEA_Q1D: usize = 5;
 const NE_VAL: usize = 244;
@@ -100,17 +101,25 @@ unsafe fn main() {
         }
 
         let start = get_time_ns();
-        core::intrinsics::offload::<_, _, ()>(
-            _mass3dea,
-            [NE_VAL as u32, 1, 1],
-            [MEA_D1D as u32, MEA_D1D as u32, MEA_D1D as u32],
-            (
-                B as *const [f64; MEA_Q1D * MEA_D1D],
-                D as *const [f64; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_VAL],
-                M as *mut [f64; MEA_D1D * MEA_D1D * MEA_D1D * MEA_D1D * MEA_D1D * MEA_D1D * NE_VAL],
-                NE_VAL,
-            ),
-        );
+        for _ in 0..ITER {
+            core::intrinsics::offload::<_, _, ()>(
+                _mass3dea,
+                [NE_VAL as u32, 1, 1],
+                [MEA_D1D as u32, MEA_D1D as u32, MEA_D1D as u32],
+                (
+                    B as *const [f64; MEA_Q1D * MEA_D1D],
+                    D as *const [f64; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_VAL],
+                    M as *mut [f64; MEA_D1D
+                        * MEA_D1D
+                        * MEA_D1D
+                        * MEA_D1D
+                        * MEA_D1D
+                        * MEA_D1D
+                        * NE_VAL],
+                    NE_VAL,
+                ),
+            );
+        }
         let end = get_time_ns();
 
         let duration_s = (end - start) as f64 / 1_000_000_000.0;
