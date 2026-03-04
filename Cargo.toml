@@ -1,3 +1,5 @@
+cargo-features = ["panic-immediate-abort"]
+
 [package]
 name = "rust_perf"
 version = "0.1.0"
@@ -11,8 +13,8 @@ libc = { version = "0.2.175", default-features = false }
 
 [profile.release]
 lto = "fat"
-panic = "abort"
+panic = "immediate-abort"
 
 [profile.dev]
 lto = "fat"
-panic = "abort"
+panic = "immediate-abort"
