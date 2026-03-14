@@ -96,4 +96,26 @@ impl<'a> Executor<'a> {
             libc::printf(c"\n".as_ptr());
         }
     }
+
+    pub fn export_csv(results: &[KernelResult], filename: *const libc::c_char) {
+        unsafe {
+            let fp = libc::fopen(filename, c"w".as_ptr());
+            if fp.is_null() {
+                return;
+            }
+            libc::fprintf(fp, c"Kernel,Reps,N,TotalTime,Checksum\n".as_ptr());
+            for r in results {
+                libc::fprintf(
+                    fp,
+                    c"%s,%u,%zu,%.6f,%.6f\n".as_ptr(),
+                    r.name.as_bytes().as_ptr(),
+                    r.reps as libc::c_uint,
+                    r.problem_size as libc::size_t,
+                    r.total_s,
+                    r.checksum,
+                );
+            }
+            libc::fclose(fp);
+        }
+    }
 }

@@ -92,4 +92,5 @@ fn main() {
     let results = suite.run_suite(unsafe { &mut *(&raw mut RESULT_BUF) });
 
     Executor::print_report(results);
+    Executor::export_csv(results, c"results.csv".as_ptr());
 }
