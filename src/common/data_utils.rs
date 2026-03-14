@@ -22,8 +22,10 @@ pub fn get_data_init_count() -> usize {
     unsafe { DATA_INIT_COUNT }
 }
 
+use crate::common::types::{Real, from_real, to_real};
+
 #[cfg(target_os = "linux")]
-pub unsafe fn init_data(ptr: *mut f64, len: usize) {
+pub unsafe fn init_data(ptr: *mut Real, len: usize) {
     let factor = if !get_data_init_count().is_multiple_of(2) {
         0.1
     } else {
@@ -31,21 +33,21 @@ pub unsafe fn init_data(ptr: *mut f64, len: usize) {
     };
     for i in 0..len {
         unsafe {
-            *ptr.add(i) = factor * (i as f64 + 1.1) / (i as f64 + 1.12345);
+            *ptr.add(i) = to_real(factor * (i as f64 + 1.1) / (i as f64 + 1.12345));
         }
     }
     inc_data_init_count();
 }
 
 #[cfg(target_os = "linux")]
-pub unsafe fn alloc_and_init_data(len: usize) -> *mut f64 {
-    let ptr = unsafe { alloc::<f64>(len) };
+pub unsafe fn alloc_and_init_data(len: usize) -> *mut Real {
+    let ptr = unsafe { alloc::<Real>(len) };
     unsafe { init_data(ptr, len) };
     ptr
 }
 
 #[cfg(target_os = "linux")]
-pub unsafe fn init_data_const(ptr: *mut f64, len: usize, val: f64) {
+pub unsafe fn init_data_const(ptr: *mut Real, len: usize, val: Real) {
     for i in 0..len {
         unsafe {
             *ptr.add(i) = val;
@@ -55,50 +57,50 @@ pub unsafe fn init_data_const(ptr: *mut f64, len: usize, val: f64) {
 }
 
 #[cfg(target_os = "linux")]
-pub unsafe fn alloc_and_init_data_const(len: usize, val: f64) -> *mut f64 {
-    let ptr = unsafe { alloc::<f64>(len) };
+pub unsafe fn alloc_and_init_data_const(len: usize, val: Real) -> *mut Real {
+    let ptr = unsafe { alloc::<Real>(len) };
     unsafe { init_data_const(ptr, len, val) };
     ptr
 }
 
 #[cfg(target_os = "linux")]
-pub unsafe fn init_data_rand_value(ptr: *mut f64, len: usize) {
+pub unsafe fn init_data_rand_value(ptr: *mut Real, len: usize) {
     unsafe { libc::srand(DATA_INIT_SEED) };
     for i in 0..len {
         let r = unsafe { libc::rand() } as f64;
         let rmax = libc::RAND_MAX as f64;
         unsafe {
-            *ptr.add(i) = r / rmax;
+            *ptr.add(i) = to_real(r / rmax);
         }
     }
     inc_data_init_count();
 }
 
 #[cfg(target_os = "linux")]
-pub unsafe fn alloc_and_init_data_rand_value(len: usize) -> *mut f64 {
-    let ptr = unsafe { alloc::<f64>(len) };
+pub unsafe fn alloc_and_init_data_rand_value(len: usize) -> *mut Real {
+    let ptr = unsafe { alloc::<Real>(len) };
     unsafe { init_data_rand_value(ptr, len) };
     ptr
 }
 
 #[cfg(target_os = "linux")]
-pub fn init_data_scalar() -> f64 {
+pub fn init_data_scalar() -> Real {
     let factor = if !get_data_init_count().is_multiple_of(2) {
         0.1
     } else {
         0.2
     };
-    let val = factor * 1.1 / 1.12345;
+    let val = to_real(factor * 1.1 / 1.12345);
     inc_data_init_count();
     val
 }
 
 #[cfg(target_os = "linux")]
-pub unsafe fn calc_checksum(ptr: *const f64, len: usize) -> f64 {
+pub unsafe fn calc_checksum(ptr: *const Real, len: usize) -> f64 {
     let mut chk = KahanSum::new(0.0);
 
     for j in 0..len {
-        let val = unsafe { *ptr.add(j) };
+        let val = from_real(unsafe { *ptr.add(j) });
         chk.add(calc_multiplier(j as f64, if val >= 0.0 { 1.0 } else { 0.5 }) * val.abs());
     }
 

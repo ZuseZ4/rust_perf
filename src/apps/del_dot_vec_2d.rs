@@ -40,12 +40,15 @@ use crate::common::kernel_base::KernelBase;
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
+use crate::common::types::{Real, to_real};
+
+#[cfg(target_os = "linux")]
 pub struct DelDotVec2D {
-    x: *mut f64,
-    y: *mut f64,
-    xdot: *mut f64,
-    ydot: *mut f64,
-    div: *mut f64,
+    x: *mut Real,
+    y: *mut Real,
+    xdot: *mut Real,
+    ydot: *mut Real,
+    div: *mut Real,
     real_zones: *mut usize,
 }
 
@@ -75,8 +78,8 @@ impl KernelBase for DelDotVec2D {
 
     fn setup(&mut self) {
         unsafe {
-            self.x = alloc_and_init_data_const(NNALLS, 0.0);
-            self.y = alloc_and_init_data_const(NNALLS, 0.0);
+            self.x = alloc_and_init_data_const(NNALLS, to_real(0.0));
+            self.y = alloc_and_init_data_const(NNALLS, to_real(0.0));
         }
         self.real_zones = unsafe { alloc::<usize>(N_REAL_ZONES) };
         for i in 0..N_REAL_ZONES {
@@ -96,8 +99,8 @@ impl KernelBase for DelDotVec2D {
             for i in istart..iend {
                 let idx = (i + j * JP as isize) as usize;
                 unsafe {
-                    *self.x.add(idx) = i as f64 * dx;
-                    *self.y.add(idx) = j as f64 * dy;
+                    *self.x.add(idx) = to_real(i as f64 * dx);
+                    *self.y.add(idx) = to_real(j as f64 * dy);
                 }
             }
         }
@@ -116,28 +119,28 @@ impl KernelBase for DelDotVec2D {
         unsafe {
             self.xdot = alloc_and_init_data(NNALLS);
             self.ydot = alloc_and_init_data(NNALLS);
-            self.div = alloc_and_init_data_const(NNALLS, 0.0);
+            self.div = alloc_and_init_data_const(NNALLS, to_real(0.0));
         }
     }
 
     fn run_kernel(&mut self) {
-        const PTINY: f64 = 1.0e-20;
-        const HALF: f64 = 0.5;
+        let ptiny = to_real(1.0e-20);
+        let half = to_real(0.5);
         unsafe {
             core::intrinsics::offload::<_, _, ()>(
                 _del_dot_vec_2d,
                 [BLOCKS, 1, 1],
                 [THREADS_PER_BLOCK, 1, 1],
                 (
-                    self.div as *mut [f64; NNALLS],
-                    &*(self.x as *const [f64; NNALLS]),
-                    &*(self.y as *const [f64; NNALLS]),
-                    &*(self.xdot as *const [f64; NNALLS]),
-                    &*(self.ydot as *const [f64; NNALLS]),
+                    self.div as *mut [Real; NNALLS],
+                    &*(self.x as *const [Real; NNALLS]),
+                    &*(self.y as *const [Real; NNALLS]),
+                    &*(self.xdot as *const [Real; NNALLS]),
+                    &*(self.ydot as *const [Real; NNALLS]),
                     &*(self.real_zones as *const [usize; N_REAL_ZONES]),
                     JP,
-                    HALF,
-                    PTINY,
+                    half,
+                    ptiny,
                     N_REAL_ZONES,
                 ),
             );
@@ -145,7 +148,7 @@ impl KernelBase for DelDotVec2D {
     }
 
     fn update_checksum(&self) -> f64 {
-        unsafe { calc_checksum(self.div as *const f64, NNALLS) }
+        unsafe { calc_checksum(self.div as *const Real, NNALLS) }
     }
 
     fn tear_down(&mut self) {
@@ -169,32 +172,35 @@ impl KernelBase for DelDotVec2D {
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _del_dot_vec_2d(
-        div: *mut [f64; NNALLS],
-        x: &[f64; NNALLS],
-        y: &[f64; NNALLS],
-        xdot: &[f64; NNALLS],
-        ydot: &[f64; NNALLS],
+        div: *mut [Real; NNALLS],
+        x: &[Real; NNALLS],
+        y: &[Real; NNALLS],
+        xdot: &[Real; NNALLS],
+        ydot: &[Real; NNALLS],
         real_zones: &[usize; N_REAL_ZONES],
         jp: usize,
-        half: f64,
-        ptiny: f64,
+        half: Real,
+        ptiny: Real,
         iend: usize,
     );
 }
 
 #[cfg(not(target_os = "linux"))]
+use crate::common::types::{Real, RealExt};
+
+#[cfg(not(target_os = "linux"))]
 #[unsafe(no_mangle)]
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
-    div: &mut [f64; NNALLS],
-    x: &[f64; NNALLS],
-    y: &[f64; NNALLS],
-    xdot: &[f64; NNALLS],
-    ydot: &[f64; NNALLS],
+    div: &mut [Real; NNALLS],
+    x: &[Real; NNALLS],
+    y: &[Real; NNALLS],
+    xdot: &[Real; NNALLS],
+    ydot: &[Real; NNALLS],
     real_zones: &[usize; N_REAL_ZONES],
     jp: usize,
-    half: f64,
-    ptiny: f64,
+    half: Real,
+    ptiny: Real,
     iend: usize,
 ) {
     let ii = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
@@ -231,7 +237,7 @@ pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
         let fyi = half * (fy2 - fy4 + fy1 - fy3);
         let fyj = half * (fy3 - fy1 + fy2 - fy4);
 
-        let rarea = 1.0 / (xi * yj - xj * yi + ptiny);
+        let rarea = Real::from(1.0) / (xi * yj - xj * yi + ptiny);
         let dfxdx = rarea * (fxi * yj - fxj * yi);
         let dfydy = rarea * (fyj * xi - fyi * xj);
         let affine = (fy1 + fy2 + fy3 + fy4) / (y1 + y2 + y3 + y4);

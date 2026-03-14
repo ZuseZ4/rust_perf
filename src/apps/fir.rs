@@ -31,10 +31,13 @@ use crate::common::kernel_base::KernelBase;
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
+use crate::common::types::{Real, to_real};
+
+#[cfg(target_os = "linux")]
 pub struct Fir {
-    m_in: *mut f64,
-    m_out: *mut f64,
-    coeff: [f64; COEFFLEN],
+    m_in: *mut Real,
+    m_out: *mut Real,
+    coeff: [Real; COEFFLEN],
 }
 
 #[cfg(target_os = "linux")]
@@ -42,7 +45,7 @@ impl Fir {
     pub const INIT: Self = Fir {
         m_in: core::ptr::null_mut(),
         m_out: core::ptr::null_mut(),
-        coeff: [0.0; COEFFLEN],
+        coeff: [const { to_real(0.0) }; COEFFLEN],
     };
 }
 
@@ -60,13 +63,27 @@ impl KernelBase for Fir {
 
     fn setup(&mut self) {
         self.coeff = [
-            3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0, 3.0, -1.0, -1.0, -1.0, -1.0,
-            3.0,
+            to_real(3.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(3.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(3.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(-1.0),
+            to_real(3.0),
         ];
 
         unsafe {
             self.m_in = alloc_and_init_data_rand_value(IEND + COEFFLEN - 1);
-            self.m_out = alloc_and_init_data_const(IEND, 0.0);
+            self.m_out = alloc_and_init_data_const(IEND, to_real(0.0));
         }
     }
 
@@ -77,9 +94,9 @@ impl KernelBase for Fir {
                 [BLOCKS, 1, 1],
                 [THREADS_PER_BLOCK, 1, 1],
                 (
-                    self.m_out as *mut [f64; IEND],
-                    &*(self.m_in as *const [f64; IEND + COEFFLEN]),
-                    &self.coeff as &[f64; COEFFLEN],
+                    self.m_out as *mut [Real; IEND],
+                    &*(self.m_in as *const [Real; IEND + COEFFLEN]),
+                    &self.coeff as &[Real; COEFFLEN],
                     IEND,
                 ),
             );
@@ -87,7 +104,7 @@ impl KernelBase for Fir {
     }
 
     fn update_checksum(&self) -> f64 {
-        unsafe { calc_checksum(self.m_out as *const f64, IEND) }
+        unsafe { calc_checksum(self.m_out as *const Real, IEND) }
     }
 
     fn tear_down(&mut self) {
@@ -103,25 +120,28 @@ impl KernelBase for Fir {
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _fir(
-        m_out: *mut [f64; IEND],
-        m_in: &[f64; IEND + COEFFLEN],
-        coeff: &[f64; COEFFLEN],
+        m_out: *mut [Real; IEND],
+        m_in: &[Real; IEND + COEFFLEN],
+        coeff: &[Real; COEFFLEN],
         iend: usize,
     );
 }
 
 #[cfg(not(target_os = "linux"))]
+use crate::common::types::Real;
+
+#[cfg(not(target_os = "linux"))]
 #[unsafe(no_mangle)]
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _fir(
-    m_out: *mut [f64; IEND],
-    m_in: &[f64; IEND + COEFFLEN],
-    coeff: &[f64; COEFFLEN],
+    m_out: *mut [Real; IEND],
+    m_in: &[Real; IEND + COEFFLEN],
+    coeff: &[Real; COEFFLEN],
     iend: usize,
 ) {
     let i = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
     if i < iend {
-        let mut sum: f64 = 0.0;
+        let mut sum: Real = Real::from(0.0);
         let mut j = 0;
         while j < COEFFLEN {
             unsafe {

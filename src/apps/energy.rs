@@ -33,35 +33,38 @@ use crate::common::kernel_base::KernelBase;
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
+use crate::common::types::{Real, to_real};
+
+#[cfg(target_os = "linux")]
 pub struct Energy {
-    rho0: f64,
-    e_cut: f64,
-    emin: f64,
-    q_cut: f64,
-    e_new: *mut f64,
-    e_old: *mut f64,
-    delvc: *mut f64,
-    p_new: *mut f64,
-    p_old: *mut f64,
-    q_new: *mut f64,
-    q_old: *mut f64,
-    work: *mut f64,
-    comp_half_step: *mut f64,
-    p_half_step: *mut f64,
-    bvc: *mut f64,
-    pbvc: *mut f64,
-    ql_old: *mut f64,
-    qq_old: *mut f64,
-    vnewc: *mut f64,
+    rho0: Real,
+    e_cut: Real,
+    emin: Real,
+    q_cut: Real,
+    e_new: *mut Real,
+    e_old: *mut Real,
+    delvc: *mut Real,
+    p_new: *mut Real,
+    p_old: *mut Real,
+    q_new: *mut Real,
+    q_old: *mut Real,
+    work: *mut Real,
+    comp_half_step: *mut Real,
+    p_half_step: *mut Real,
+    bvc: *mut Real,
+    pbvc: *mut Real,
+    ql_old: *mut Real,
+    qq_old: *mut Real,
+    vnewc: *mut Real,
 }
 
 #[cfg(target_os = "linux")]
 impl Energy {
     pub const INIT: Self = Energy {
-        rho0: 0.0,
-        e_cut: 0.0,
-        emin: 0.0,
-        q_cut: 0.0,
+        rho0: to_real(0.0),
+        e_cut: to_real(0.0),
+        emin: to_real(0.0),
+        q_cut: to_real(0.0),
         e_new: core::ptr::null_mut(),
         e_old: core::ptr::null_mut(),
         delvc: core::ptr::null_mut(),
@@ -93,18 +96,18 @@ impl KernelBase for Energy {
     }
 
     fn setup(&mut self) {
-        self.rho0 = 0.5;
-        self.e_cut = 1.0e-7;
-        self.emin = -1.0e15;
-        self.q_cut = 1.0e-7;
+        self.rho0 = to_real(0.5);
+        self.e_cut = to_real(1.0e-7);
+        self.emin = to_real(-1.0e15);
+        self.q_cut = to_real(1.0e-7);
 
         unsafe {
-            self.e_new = alloc_and_init_data_const(IEND, 0.0);
+            self.e_new = alloc_and_init_data_const(IEND, to_real(0.0));
             self.e_old = alloc_and_init_data(IEND);
             self.delvc = alloc_and_init_data(IEND);
             self.p_new = alloc_and_init_data(IEND);
             self.p_old = alloc_and_init_data(IEND);
-            self.q_new = alloc_and_init_data_const(IEND, 0.0);
+            self.q_new = alloc_and_init_data_const(IEND, to_real(0.0));
             self.q_old = alloc_and_init_data(IEND);
             self.work = alloc_and_init_data(IEND);
             self.comp_half_step = alloc_and_init_data(IEND);
@@ -125,71 +128,71 @@ impl KernelBase for Energy {
     fn run_kernel(&mut self) {
         unsafe {
             energycalc1(
-                self.e_new as *mut [f64; IEND],
-                &*(self.e_old as *const [f64; IEND]),
-                &*(self.delvc as *const [f64; IEND]),
-                &*(self.p_old as *const [f64; IEND]),
-                &*(self.q_old as *const [f64; IEND]),
-                &*(self.work as *const [f64; IEND]),
+                self.e_new as *mut [Real; IEND],
+                &*(self.e_old as *const [Real; IEND]),
+                &*(self.delvc as *const [Real; IEND]),
+                &*(self.p_old as *const [Real; IEND]),
+                &*(self.q_old as *const [Real; IEND]),
+                &*(self.work as *const [Real; IEND]),
                 IEND,
             );
             energycalc2(
-                &*(self.delvc as *const [f64; IEND]),
-                self.q_new as *mut [f64; IEND],
-                &*(self.comp_half_step as *const [f64; IEND]),
-                &*(self.p_half_step as *const [f64; IEND]),
-                self.e_new as *mut [f64; IEND],
-                &*(self.bvc as *const [f64; IEND]),
-                &*(self.pbvc as *const [f64; IEND]),
-                &*(self.ql_old as *const [f64; IEND]),
-                &*(self.qq_old as *const [f64; IEND]),
+                &*(self.delvc as *const [Real; IEND]),
+                self.q_new as *mut [Real; IEND],
+                &*(self.comp_half_step as *const [Real; IEND]),
+                &*(self.p_half_step as *const [Real; IEND]),
+                self.e_new as *mut [Real; IEND],
+                &*(self.bvc as *const [Real; IEND]),
+                &*(self.pbvc as *const [Real; IEND]),
+                &*(self.ql_old as *const [Real; IEND]),
+                &*(self.qq_old as *const [Real; IEND]),
                 self.rho0,
                 IEND,
             );
             energycalc3(
-                self.e_new as *mut [f64; IEND],
-                &*(self.delvc as *const [f64; IEND]),
-                &*(self.p_old as *const [f64; IEND]),
-                &*(self.q_old as *const [f64; IEND]),
-                &*(self.p_half_step as *const [f64; IEND]),
-                &*(self.q_new as *const [f64; IEND]),
+                self.e_new as *mut [Real; IEND],
+                &*(self.delvc as *const [Real; IEND]),
+                &*(self.p_old as *const [Real; IEND]),
+                &*(self.q_old as *const [Real; IEND]),
+                &*(self.p_half_step as *const [Real; IEND]),
+                &*(self.q_new as *const [Real; IEND]),
                 IEND,
             );
             energycalc4(
-                self.e_new as *mut [f64; IEND],
-                &*(self.work as *const [f64; IEND]),
+                self.e_new as *mut [Real; IEND],
+                &*(self.work as *const [Real; IEND]),
                 self.e_cut,
                 self.emin,
                 IEND,
             );
             energycalc5(
-                &*(self.delvc as *const [f64; IEND]),
-                &*(self.pbvc as *const [f64; IEND]),
-                self.e_new as *mut [f64; IEND],
-                &*(self.vnewc as *const [f64; IEND]),
-                &*(self.bvc as *const [f64; IEND]),
-                &*(self.p_new as *const [f64; IEND]),
-                &*(self.ql_old as *const [f64; IEND]),
-                &*(self.qq_old as *const [f64; IEND]),
-                &*(self.p_old as *const [f64; IEND]),
-                &*(self.q_old as *const [f64; IEND]),
-                &*(self.p_half_step as *const [f64; IEND]),
-                &*(self.q_new as *const [f64; IEND]),
+                &*(self.delvc as *const [Real; IEND]),
+                &*(self.pbvc as *const [Real; IEND]),
+                self.e_new as *mut [Real; IEND],
+                &*(self.vnewc as *const [Real; IEND]),
+                &*(self.bvc as *const [Real; IEND]),
+                &*(self.p_new as *const [Real; IEND]),
+                &*(self.ql_old as *const [Real; IEND]),
+                &*(self.qq_old as *const [Real; IEND]),
+                &*(self.p_old as *const [Real; IEND]),
+                &*(self.q_old as *const [Real; IEND]),
+                &*(self.p_half_step as *const [Real; IEND]),
+                &*(self.q_new as *const [Real; IEND]),
                 self.rho0,
                 self.e_cut,
                 self.emin,
                 IEND,
             );
             energycalc6(
-                &*(self.delvc as *const [f64; IEND]),
-                &*(self.pbvc as *const [f64; IEND]),
-                self.e_new as *mut [f64; IEND],
-                &*(self.vnewc as *const [f64; IEND]),
-                &*(self.bvc as *const [f64; IEND]),
-                &*(self.p_new as *const [f64; IEND]),
-                self.q_new as *mut [f64; IEND],
-                &*(self.ql_old as *const [f64; IEND]),
-                &*(self.qq_old as *const [f64; IEND]),
+                &*(self.delvc as *const [Real; IEND]),
+                &*(self.pbvc as *const [Real; IEND]),
+                self.e_new as *mut [Real; IEND],
+                &*(self.vnewc as *const [Real; IEND]),
+                &*(self.bvc as *const [Real; IEND]),
+                &*(self.p_new as *const [Real; IEND]),
+                self.q_new as *mut [Real; IEND],
+                &*(self.ql_old as *const [Real; IEND]),
+                &*(self.qq_old as *const [Real; IEND]),
                 self.rho0,
                 self.q_cut,
                 IEND,
@@ -199,8 +202,8 @@ impl KernelBase for Energy {
 
     fn update_checksum(&self) -> f64 {
         unsafe {
-            calc_checksum(self.e_new as *const f64, IEND)
-                + calc_checksum(self.q_new as *const f64, IEND)
+            calc_checksum(self.e_new as *const Real, IEND)
+                + calc_checksum(self.q_new as *const Real, IEND)
         }
     }
 
@@ -242,12 +245,12 @@ impl KernelBase for Energy {
 
 #[cfg(target_os = "linux")]
 unsafe fn energycalc1(
-    e_new: *mut [f64; IEND],
-    e_old: &[f64; IEND],
-    delvc: &[f64; IEND],
-    p_old: &[f64; IEND],
-    q_old: &[f64; IEND],
-    work: &[f64; IEND],
+    e_new: *mut [Real; IEND],
+    e_old: &[Real; IEND],
+    delvc: &[Real; IEND],
+    p_old: &[Real; IEND],
+    q_old: &[Real; IEND],
+    work: &[Real; IEND],
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -259,16 +262,16 @@ unsafe fn energycalc1(
 }
 #[cfg(target_os = "linux")]
 unsafe fn energycalc2(
-    delvc: &[f64; IEND],
-    q_new: *mut [f64; IEND],
-    comp_half_step: &[f64; IEND],
-    p_half_step: &[f64; IEND],
-    e_new: *mut [f64; IEND],
-    bvc: &[f64; IEND],
-    pbvc: &[f64; IEND],
-    ql_old: &[f64; IEND],
-    qq_old: &[f64; IEND],
-    rho0: f64,
+    delvc: &[Real; IEND],
+    q_new: *mut [Real; IEND],
+    comp_half_step: &[Real; IEND],
+    p_half_step: &[Real; IEND],
+    e_new: *mut [Real; IEND],
+    bvc: &[Real; IEND],
+    pbvc: &[Real; IEND],
+    ql_old: &[Real; IEND],
+    qq_old: &[Real; IEND],
+    rho0: Real,
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -292,12 +295,12 @@ unsafe fn energycalc2(
 }
 #[cfg(target_os = "linux")]
 unsafe fn energycalc3(
-    e_new: *mut [f64; IEND],
-    delvc: &[f64; IEND],
-    p_old: &[f64; IEND],
-    q_old: &[f64; IEND],
-    p_half_step: &[f64; IEND],
-    q_new: &[f64; IEND],
+    e_new: *mut [Real; IEND],
+    delvc: &[Real; IEND],
+    p_old: &[Real; IEND],
+    q_old: &[Real; IEND],
+    p_half_step: &[Real; IEND],
+    q_new: &[Real; IEND],
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -309,10 +312,10 @@ unsafe fn energycalc3(
 }
 #[cfg(target_os = "linux")]
 unsafe fn energycalc4(
-    e_new: *mut [f64; IEND],
-    work: &[f64; IEND],
-    e_cut: f64,
-    emin: f64,
+    e_new: *mut [Real; IEND],
+    work: &[Real; IEND],
+    e_cut: Real,
+    emin: Real,
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -324,21 +327,21 @@ unsafe fn energycalc4(
 }
 #[cfg(target_os = "linux")]
 unsafe fn energycalc5(
-    delvc: &[f64; IEND],
-    pbvc: &[f64; IEND],
-    e_new: *mut [f64; IEND],
-    vnewc: &[f64; IEND],
-    bvc: &[f64; IEND],
-    p_new: &[f64; IEND],
-    ql_old: &[f64; IEND],
-    qq_old: &[f64; IEND],
-    p_old: &[f64; IEND],
-    q_old: &[f64; IEND],
-    p_half_step: &[f64; IEND],
-    q_new: &[f64; IEND],
-    rho0: f64,
-    e_cut: f64,
-    emin: f64,
+    delvc: &[Real; IEND],
+    pbvc: &[Real; IEND],
+    e_new: *mut [Real; IEND],
+    vnewc: &[Real; IEND],
+    bvc: &[Real; IEND],
+    p_new: &[Real; IEND],
+    ql_old: &[Real; IEND],
+    qq_old: &[Real; IEND],
+    p_old: &[Real; IEND],
+    q_old: &[Real; IEND],
+    p_half_step: &[Real; IEND],
+    q_new: &[Real; IEND],
+    rho0: Real,
+    e_cut: Real,
+    emin: Real,
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -367,17 +370,17 @@ unsafe fn energycalc5(
 }
 #[cfg(target_os = "linux")]
 unsafe fn energycalc6(
-    delvc: &[f64; IEND],
-    pbvc: &[f64; IEND],
-    e_new: *mut [f64; IEND],
-    vnewc: &[f64; IEND],
-    bvc: &[f64; IEND],
-    p_new: &[f64; IEND],
-    q_new: *mut [f64; IEND],
-    ql_old: &[f64; IEND],
-    qq_old: &[f64; IEND],
-    rho0: f64,
-    q_cut: f64,
+    delvc: &[Real; IEND],
+    pbvc: &[Real; IEND],
+    e_new: *mut [Real; IEND],
+    vnewc: &[Real; IEND],
+    bvc: &[Real; IEND],
+    p_new: &[Real; IEND],
+    q_new: *mut [Real; IEND],
+    ql_old: &[Real; IEND],
+    qq_old: &[Real; IEND],
+    rho0: Real,
+    q_cut: Real,
     iend: usize,
 ) {
     core::intrinsics::offload(
@@ -393,95 +396,98 @@ unsafe fn energycalc6(
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _energycalc1(
-        e_new: *mut [f64; IEND],
-        e_old: &[f64; IEND],
-        delvc: &[f64; IEND],
-        p_old: &[f64; IEND],
-        q_old: &[f64; IEND],
-        work: &[f64; IEND],
+        e_new: *mut [Real; IEND],
+        e_old: &[Real; IEND],
+        delvc: &[Real; IEND],
+        p_old: &[Real; IEND],
+        q_old: &[Real; IEND],
+        work: &[Real; IEND],
         iend: usize,
     );
     pub fn _energycalc2(
-        delvc: &[f64; IEND],
-        q_new: *mut [f64; IEND],
-        comp_half_step: &[f64; IEND],
-        p_half_step: &[f64; IEND],
-        e_new: *mut [f64; IEND],
-        bvc: &[f64; IEND],
-        pbvc: &[f64; IEND],
-        ql_old: &[f64; IEND],
-        qq_old: &[f64; IEND],
-        rho0: f64,
+        delvc: &[Real; IEND],
+        q_new: *mut [Real; IEND],
+        comp_half_step: &[Real; IEND],
+        p_half_step: &[Real; IEND],
+        e_new: *mut [Real; IEND],
+        bvc: &[Real; IEND],
+        pbvc: &[Real; IEND],
+        ql_old: &[Real; IEND],
+        qq_old: &[Real; IEND],
+        rho0: Real,
         iend: usize,
     );
     pub fn _energycalc3(
-        e_new: *mut [f64; IEND],
-        delvc: &[f64; IEND],
-        p_old: &[f64; IEND],
-        q_old: &[f64; IEND],
-        p_half_step: &[f64; IEND],
-        q_new: &[f64; IEND],
+        e_new: *mut [Real; IEND],
+        delvc: &[Real; IEND],
+        p_old: &[Real; IEND],
+        q_old: &[Real; IEND],
+        p_half_step: &[Real; IEND],
+        q_new: &[Real; IEND],
         iend: usize,
     );
     pub fn _energycalc4(
-        e_new: *mut [f64; IEND],
-        work: &[f64; IEND],
-        e_cut: f64,
-        emin: f64,
+        e_new: *mut [Real; IEND],
+        work: &[Real; IEND],
+        e_cut: Real,
+        emin: Real,
         iend: usize,
     );
     pub fn _energycalc5(
-        delvc: &[f64; IEND],
-        pbvc: &[f64; IEND],
-        e_new: *mut [f64; IEND],
-        vnewc: &[f64; IEND],
-        bvc: &[f64; IEND],
-        p_new: &[f64; IEND],
-        ql_old: &[f64; IEND],
-        qq_old: &[f64; IEND],
-        p_old: &[f64; IEND],
-        q_old: &[f64; IEND],
-        p_half_step: &[f64; IEND],
-        q_new: &[f64; IEND],
-        rho0: f64,
-        e_cut: f64,
-        emin: f64,
+        delvc: &[Real; IEND],
+        pbvc: &[Real; IEND],
+        e_new: *mut [Real; IEND],
+        vnewc: &[Real; IEND],
+        bvc: &[Real; IEND],
+        p_new: &[Real; IEND],
+        ql_old: &[Real; IEND],
+        qq_old: &[Real; IEND],
+        p_old: &[Real; IEND],
+        q_old: &[Real; IEND],
+        p_half_step: &[Real; IEND],
+        q_new: &[Real; IEND],
+        rho0: Real,
+        e_cut: Real,
+        emin: Real,
         iend: usize,
     );
     pub fn _energycalc6(
-        delvc: &[f64; IEND],
-        pbvc: &[f64; IEND],
-        e_new: *mut [f64; IEND],
-        vnewc: &[f64; IEND],
-        bvc: &[f64; IEND],
-        p_new: &[f64; IEND],
-        q_new: *mut [f64; IEND],
-        ql_old: &[f64; IEND],
-        qq_old: &[f64; IEND],
-        rho0: f64,
-        q_cut: f64,
+        delvc: &[Real; IEND],
+        pbvc: &[Real; IEND],
+        e_new: *mut [Real; IEND],
+        vnewc: &[Real; IEND],
+        bvc: &[Real; IEND],
+        p_new: &[Real; IEND],
+        q_new: *mut [Real; IEND],
+        ql_old: &[Real; IEND],
+        qq_old: &[Real; IEND],
+        rho0: Real,
+        q_cut: Real,
         iend: usize,
     );
 }
+
+#[cfg(not(target_os = "linux"))]
+use crate::common::types::{Real, RealExt};
 
 #[cfg(not(target_os = "linux"))]
 #[unsafe(no_mangle)]
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc1(
-    e_new: *mut [f64; IEND],
-    e_old: &[f64; IEND],
-    delvc: &[f64; IEND],
-    p_old: &[f64; IEND],
-    q_old: &[f64; IEND],
-    work: &[f64; IEND],
+    e_new: *mut [Real; IEND],
+    e_old: &[Real; IEND],
+    delvc: &[Real; IEND],
+    p_old: &[Real; IEND],
+    q_old: &[Real; IEND],
+    work: &[Real; IEND],
     iend: usize,
 ) {
     unsafe {
         let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
         if i < iend {
-            (*e_new)[i] =
-                (*e_old)[i] - 0.5 * (*delvc)[i] * ((*p_old)[i] + (*q_old)[i]) + 0.5 * (*work)[i];
+            (*e_new)[i] = (*e_old)[i] - Real::from(0.5) * (*delvc)[i] * ((*p_old)[i] + (*q_old)[i])
+                + Real::from(0.5) * (*work)[i];
         }
     }
 }
@@ -491,32 +497,32 @@ pub extern "gpu-kernel" fn _energycalc1(
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc2(
-    delvc: &[f64; IEND],
-    q_new: *mut [f64; IEND],
-    comp_half_step: &[f64; IEND],
-    p_half_step: &[f64; IEND],
-    e_new: *mut [f64; IEND],
-    bvc: &[f64; IEND],
-    pbvc: &[f64; IEND],
-    ql_old: &[f64; IEND],
-    qq_old: &[f64; IEND],
-    rho0: f64,
+    delvc: &[Real; IEND],
+    q_new: *mut [Real; IEND],
+    comp_half_step: &[Real; IEND],
+    p_half_step: &[Real; IEND],
+    e_new: *mut [Real; IEND],
+    bvc: &[Real; IEND],
+    pbvc: &[Real; IEND],
+    ql_old: &[Real; IEND],
+    qq_old: &[Real; IEND],
+    rho0: Real,
     iend: usize,
 ) {
     unsafe {
         let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
         if i < iend {
-            if (*delvc)[i] > 0.0 {
-                (*q_new)[i] = 0.0;
+            if ((*delvc)[i]).to_f64() > 0.0 {
+                (*q_new)[i] = Real::from(0.0);
             } else {
-                let vhalf = 1.0 / (1.0 + (*comp_half_step)[i]);
+                let vhalf = Real::from(1.0) / (Real::from(1.0) + (*comp_half_step)[i]);
                 let mut ssc = ((*pbvc)[i] * (*e_new)[i]
                     + vhalf * vhalf * (*bvc)[i] * (*p_half_step)[i])
                     / rho0;
-                if ssc <= 0.1111111e-36 {
-                    ssc = 0.3333333e-18;
+                if ssc.to_f64() <= 0.1111111e-36 {
+                    ssc = Real::from(0.3333333e-18);
                 } else {
-                    ssc = core::f64::math::sqrt(ssc);
+                    ssc = ssc.sqrt();
                 }
                 (*q_new)[i] = ssc * (*ql_old)[i] + (*qq_old)[i];
             }
@@ -529,20 +535,21 @@ pub extern "gpu-kernel" fn _energycalc2(
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc3(
-    e_new: *mut [f64; IEND],
-    delvc: &[f64; IEND],
-    p_old: &[f64; IEND],
-    q_old: &[f64; IEND],
-    p_half_step: &[f64; IEND],
-    q_new: &[f64; IEND],
+    e_new: *mut [Real; IEND],
+    delvc: &[Real; IEND],
+    p_old: &[Real; IEND],
+    q_old: &[Real; IEND],
+    p_half_step: &[Real; IEND],
+    q_new: &[Real; IEND],
     iend: usize,
 ) {
     unsafe {
         let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
         if i < iend {
-            (*e_new)[i] += 0.5
+            (*e_new)[i] += Real::from(0.5)
                 * (*delvc)[i]
-                * (3.0 * ((*p_old)[i] + (*q_old)[i]) - 4.0 * ((*p_half_step)[i] + (*q_new)[i]));
+                * (Real::from(3.0) * ((*p_old)[i] + (*q_old)[i])
+                    - Real::from(4.0) * ((*p_half_step)[i] + (*q_new)[i]));
         }
     }
 }
@@ -552,18 +559,18 @@ pub extern "gpu-kernel" fn _energycalc3(
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc4(
-    e_new: *mut [f64; IEND],
-    work: &[f64; IEND],
-    e_cut: f64,
-    emin: f64,
+    e_new: *mut [Real; IEND],
+    work: &[Real; IEND],
+    e_cut: Real,
+    emin: Real,
     iend: usize,
 ) {
     unsafe {
         let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
         if i < iend {
-            (*e_new)[i] += 0.5 * (*work)[i];
-            if (*e_new)[i].abs() < e_cut {
-                (*e_new)[i] = 0.0;
+            (*e_new)[i] += Real::from(0.5) * (*work)[i];
+            if ((*e_new)[i]).abs() < e_cut {
+                (*e_new)[i] = Real::from(0.0);
             }
             if (*e_new)[i] < emin {
                 (*e_new)[i] = emin;
@@ -577,46 +584,46 @@ pub extern "gpu-kernel" fn _energycalc4(
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc5(
-    delvc: &[f64; IEND],
-    pbvc: &[f64; IEND],
-    e_new: *mut [f64; IEND],
-    vnewc: &[f64; IEND],
-    bvc: &[f64; IEND],
-    p_new: &[f64; IEND],
-    ql_old: &[f64; IEND],
-    qq_old: &[f64; IEND],
-    p_old: &[f64; IEND],
-    q_old: &[f64; IEND],
-    p_half_step: &[f64; IEND],
-    q_new: &[f64; IEND],
-    rho0: f64,
-    e_cut: f64,
-    emin: f64,
+    delvc: &[Real; IEND],
+    pbvc: &[Real; IEND],
+    e_new: *mut [Real; IEND],
+    vnewc: &[Real; IEND],
+    bvc: &[Real; IEND],
+    p_new: &[Real; IEND],
+    ql_old: &[Real; IEND],
+    qq_old: &[Real; IEND],
+    p_old: &[Real; IEND],
+    q_old: &[Real; IEND],
+    p_half_step: &[Real; IEND],
+    q_new: &[Real; IEND],
+    rho0: Real,
+    e_cut: Real,
+    emin: Real,
     iend: usize,
 ) {
     unsafe {
         let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
         if i < iend {
-            let q_tilde = if (*delvc)[i] > 0.0 {
-                0.0
+            let q_tilde = if ((*delvc)[i]).to_f64() > 0.0 {
+                Real::from(0.0)
             } else {
                 let mut ssc = ((*pbvc)[i] * (*e_new)[i]
                     + (*vnewc)[i] * (*vnewc)[i] * (*bvc)[i] * (*p_new)[i])
                     / rho0;
-                if ssc <= 0.1111111e-36 {
-                    ssc = 0.3333333e-18;
+                if ssc.to_f64() <= 0.1111111e-36 {
+                    ssc = Real::from(0.3333333e-18);
                 } else {
-                    ssc = core::f64::math::sqrt(ssc);
+                    ssc = ssc.sqrt();
                 }
                 ssc * (*ql_old)[i] + (*qq_old)[i]
             };
-            (*e_new)[i] -= (7.0 * ((*p_old)[i] + (*q_old)[i])
-                - 8.0 * ((*p_half_step)[i] + (*q_new)[i])
+            (*e_new)[i] -= (Real::from(7.0) * ((*p_old)[i] + (*q_old)[i])
+                - Real::from(8.0) * ((*p_half_step)[i] + (*q_new)[i])
                 + ((*p_new)[i] + q_tilde))
                 * (*delvc)[i]
-                / 6.0;
-            if (*e_new)[i].abs() < e_cut {
-                (*e_new)[i] = 0.0;
+                / Real::from(6.0);
+            if ((*e_new)[i]).abs() < e_cut {
+                (*e_new)[i] = Real::from(0.0);
             }
             if (*e_new)[i] < emin {
                 (*e_new)[i] = emin;
@@ -630,33 +637,33 @@ pub extern "gpu-kernel" fn _energycalc5(
 #[inline(never)]
 #[rustc_offload_kernel]
 pub extern "gpu-kernel" fn _energycalc6(
-    delvc: &[f64; IEND],
-    pbvc: &[f64; IEND],
-    e_new: *mut [f64; IEND],
-    vnewc: &[f64; IEND],
-    bvc: &[f64; IEND],
-    p_new: &[f64; IEND],
-    q_new: *mut [f64; IEND],
-    ql_old: &[f64; IEND],
-    qq_old: &[f64; IEND],
-    rho0: f64,
-    q_cut: f64,
+    delvc: &[Real; IEND],
+    pbvc: &[Real; IEND],
+    e_new: *mut [Real; IEND],
+    vnewc: &[Real; IEND],
+    bvc: &[Real; IEND],
+    p_new: &[Real; IEND],
+    q_new: *mut [Real; IEND],
+    ql_old: &[Real; IEND],
+    qq_old: &[Real; IEND],
+    rho0: Real,
+    q_cut: Real,
     iend: usize,
 ) {
     unsafe {
         let i = (block_idx_x() * block_dim_x() + thread_idx_x()) as usize;
-        if i < iend && (*delvc)[i] <= 0.0 {
+        if i < iend && ((*delvc)[i]).to_f64() <= 0.0 {
             let mut ssc = ((*pbvc)[i] * (*e_new)[i]
                 + (*vnewc)[i] * (*vnewc)[i] * (*bvc)[i] * (*p_new)[i])
                 / rho0;
-            if ssc <= 0.1111111e-36 {
-                ssc = 0.3333333e-18;
+            if ssc.to_f64() <= 0.1111111e-36 {
+                ssc = Real::from(0.3333333e-18);
             } else {
-                ssc = core::f64::math::sqrt(ssc);
+                ssc = ssc.sqrt();
             }
             (*q_new)[i] = ssc * (*ql_old)[i] + (*qq_old)[i];
-            if (*q_new)[i].abs() < q_cut {
-                (*q_new)[i] = 0.0;
+            if ((*q_new)[i]).abs() < q_cut {
+                (*q_new)[i] = Real::from(0.0);
             }
         }
     }

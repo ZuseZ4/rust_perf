@@ -7,6 +7,7 @@
 #![feature(abi_gpu_kernel)]
 #![feature(core_float_math)]
 #![feature(core_intrinsics)]
+#![feature(float_algebraic)]
 #![feature(rustc_attrs)]
 #![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]

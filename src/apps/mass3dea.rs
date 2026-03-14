@@ -33,11 +33,15 @@ use crate::common::kernel_base::KernelBase;
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
+use crate::common::types::{Real, to_real};
+
+#[cfg(target_os = "linux")]
 pub struct Mass3DEA {
     ne: usize,
-    b: *mut f64,
-    d: *mut f64,
-    m: *mut f64,
+    b: *mut Real,
+    d: *mut Real,
+    m: *mut Real,
 }
 
 #[cfg(target_os = "linux")]
@@ -68,9 +72,9 @@ impl KernelBase for Mass3DEA {
         self.ne = 125;
 
         unsafe {
-            self.b = alloc_and_init_data_const(MEA_Q1D * MEA_D1D, 1.0);
-            self.d = alloc_and_init_data_const(MEA_Q1D * MEA_Q1D * MEA_Q1D * self.ne, 1.0);
-            self.m = alloc_and_init_data_const(EA_MAT * self.ne, 0.0);
+            self.b = alloc_and_init_data_const(MEA_Q1D * MEA_D1D, to_real(1.0));
+            self.d = alloc_and_init_data_const(MEA_Q1D * MEA_Q1D * MEA_Q1D * self.ne, to_real(1.0));
+            self.m = alloc_and_init_data_const(EA_MAT * self.ne, to_real(0.0));
         }
     }
 
@@ -81,16 +85,16 @@ impl KernelBase for Mass3DEA {
             [ne as u32, 1, 1],
             [MEA_D1D as u32, MEA_D1D as u32, MEA_D1D as u32],
             (
-                self.b as *const [f64; MEA_Q1D * MEA_D1D],
-                self.d as *const [f64; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_DEFAULT],
-                self.m as *mut [f64; EA_MAT * NE_DEFAULT],
+                self.b as *const [Real; MEA_Q1D * MEA_D1D],
+                self.d as *const [Real; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_DEFAULT],
+                self.m as *mut [Real; EA_MAT * NE_DEFAULT],
                 ne,
             ),
         );
     }
 
     fn update_checksum(&self) -> f64 {
-        unsafe { calc_checksum(self.m as *const f64, EA_MAT * self.ne) }
+        unsafe { calc_checksum(self.m as *const Real, EA_MAT * self.ne) }
     }
 
     fn tear_down(&mut self) {
@@ -109,20 +113,23 @@ impl KernelBase for Mass3DEA {
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _mass3dea(
-        B: *const [f64; MEA_Q1D * MEA_D1D],
-        D: *const [f64; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_DEFAULT],
-        M: *mut [f64; EA_MAT * NE_DEFAULT],
+        B: *const [Real; MEA_Q1D * MEA_D1D],
+        D: *const [Real; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_DEFAULT],
+        M: *mut [Real; EA_MAT * NE_DEFAULT],
         NE: usize,
     );
 }
 
 #[cfg(not(target_os = "linux"))]
+use crate::common::types::Real;
+
+#[cfg(not(target_os = "linux"))]
 #[unsafe(no_mangle)]
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _mass3dea(
-    B: *const [f64; MEA_Q1D * MEA_D1D],
-    D: *const [f64; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_DEFAULT],
-    M: *mut [f64; EA_MAT * NE_DEFAULT],
+    B: *const [Real; MEA_Q1D * MEA_D1D],
+    D: *const [Real; MEA_Q1D * MEA_Q1D * MEA_Q1D * NE_DEFAULT],
+    M: *mut [Real; EA_MAT * NE_DEFAULT],
     NE: usize,
 ) {
     let e = unsafe { block_idx_x() as usize };
@@ -139,7 +146,7 @@ pub unsafe extern "gpu-kernel" fn _mass3dea(
         for j1 in 0..MEA_D1D {
             for j2 in 0..MEA_D1D {
                 for j3 in 0..MEA_D1D {
-                    let mut val: f64 = 0.0;
+                    let mut val: Real = Real::from(0.0);
                     for k1 in 0..MEA_Q1D {
                         let (b_k1_i1, b_k1_j1) =
                             unsafe { ((*B)[k1 + MEA_Q1D * i1], (*B)[k1 + MEA_Q1D * j1]) };

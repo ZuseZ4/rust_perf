@@ -10,12 +10,14 @@ crate-type = ["cdylib"]
 libc = { version = "0.2.175", default-features = false }
 
 [features]
-default = ["all"]
+default = ["all", "f64"]
 all = ["energy", "fir", "del_dot_vec_2d", "mass3dea"]
 energy = []
 fir = []
 del_dot_vec_2d = []
 mass3dea = []
+f64 = []
+a64 = []
 
 [profile.release]
 lto = "fat"
