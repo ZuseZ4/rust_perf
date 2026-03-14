@@ -9,6 +9,14 @@ crate-type = ["cdylib"]
 [dependencies]
 libc = { version = "0.2.175", default-features = false }
 
+[features]
+default = ["all"]
+all = ["energy", "fir", "del_dot_vec_2d", "mass3dea"]
+energy = []
+fir = []
+del_dot_vec_2d = []
+mass3dea = []
+
 [profile.release]
 lto = "fat"
 panic = "abort"
