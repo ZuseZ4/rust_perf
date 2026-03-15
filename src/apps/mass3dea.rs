@@ -132,55 +132,67 @@ pub unsafe extern "gpu-kernel" fn _mass3dea(
     M: *mut [Real; EA_MAT * NE_DEFAULT],
     NE: usize,
 ) {
-    let e = unsafe { block_idx_x() as usize };
-    if e >= NE {
-        return;
-    }
+    let e = block_idx_x() as usize;
 
-    let x = unsafe { thread_idx_x() as usize };
-    let y = unsafe { thread_idx_y() as usize };
-    let z = unsafe { thread_idx_z() as usize };
+    if e < NE {
+        let tx = thread_idx_x() as usize;
+        let ty = thread_idx_y() as usize;
+        let tz = thread_idx_z() as usize;
 
-    if x < MEA_D1D && y < MEA_D1D && z < MEA_D1D {
-        let (i1, i2, i3) = (x, y, z);
-        for j1 in 0..MEA_D1D {
-            for j2 in 0..MEA_D1D {
-                for j3 in 0..MEA_D1D {
-                    let mut val: Real = Real::from(0.0);
-                    for k1 in 0..MEA_Q1D {
-                        let (b_k1_i1, b_k1_j1) =
-                            unsafe { ((*B)[k1 + MEA_Q1D * i1], (*B)[k1 + MEA_Q1D * j1]) };
-                        for k2 in 0..MEA_Q1D {
-                            let (b_k2_i2, b_k2_j2) =
-                                unsafe { ((*B)[k2 + MEA_Q1D * i2], (*B)[k2 + MEA_Q1D * j2]) };
-                            for k3 in 0..MEA_Q1D {
-                                let (b_k3_i3, b_k3_j3) =
-                                    unsafe { ((*B)[k3 + MEA_Q1D * i3], (*B)[k3 + MEA_Q1D * j3]) };
+        // TODO(Sa4dUs): RAJA_TEAM_SHARED
+        let mut s_B = [[0.0; MEA_D1D]; MEA_Q1D];
+        // TODO(Sa4dUs): RAJA_TEAM_SHARED
+        let mut s_D = [[[0.0; MEA_Q1D]; MEA_Q1D]; MEA_Q1D];
 
-                                let d_val = unsafe {
-                                    (*D)[k1 + MEA_Q1D * (k2 + MEA_Q1D * (k3 + MEA_Q1D * e))]
-                                };
+        if tz == 0 && tx < MEA_D1D && ty < MEA_Q1D {
+            let q = ty;
+            let d = tx;
+            s_B[q][d] = (*B)[q + MEA_Q1D * d];
+        }
 
-                                val += b_k1_i1
-                                    * b_k1_j1
-                                    * b_k2_i2
-                                    * b_k2_j2
-                                    * b_k3_i3
-                                    * b_k3_j3
-                                    * d_val;
+        if tx < MEA_Q1D && ty < MEA_Q1D && tz < MEA_Q1D {
+            let k1 = tx;
+            let k2 = ty;
+            let k3 = tz;
+            let d_idx =
+                k1 + MEA_Q1D * k2 + (MEA_Q1D * MEA_Q1D) * k3 + (MEA_Q1D * MEA_Q1D * MEA_Q1D) * e;
+            s_D[k1][k2][k3] = (*D)[d_idx];
+        }
+
+        _syncthreads();
+
+        if tx < MEA_D1D && ty < MEA_D1D && tz < MEA_D1D {
+            let i1 = tx;
+            let i2 = ty;
+            let i3 = tz;
+
+            for j1 in 0..MEA_D1D {
+                for j2 in 0..MEA_D1D {
+                    for j3 in 0..MEA_D1D {
+                        let mut val: Real = 0.0;
+
+                        for k1 in 0..MEA_Q1D {
+                            let b_val1 = s_B[k1][i1] * s_B[k1][j1];
+                            for k2 in 0..MEA_Q1D {
+                                let b_val2 = s_B[k2][i2] * s_B[k2][j2];
+                                for k3 in 0..MEA_Q1D {
+                                    let b_val3 = s_B[k3][i3] * s_B[k3][j3];
+
+                                    val += b_val1 * b_val2 * b_val3 * s_D[k1][k2][k3];
+                                }
                             }
                         }
-                    }
-                    let idx = i1
-                        + MEA_D1D
-                            * (i2
-                                + MEA_D1D
-                                    * (i3
-                                        + MEA_D1D
-                                            * (j1
-                                                + MEA_D1D * (j2 + MEA_D1D * (j3 + MEA_D1D * e)))));
-                    unsafe {
-                        (*M)[idx] = val;
+
+                        let m_idx = i1
+                            + MEA_D1D
+                                * (i2
+                                    + MEA_D1D
+                                        * (i3
+                                            + MEA_D1D
+                                                * (j1
+                                                    + MEA_D1D
+                                                        * (j2 + MEA_D1D * (j3 + MEA_D1D * e)))));
+                        (*M)[m_idx] = val;
                     }
                 }
             }

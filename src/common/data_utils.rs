@@ -22,6 +22,7 @@ pub fn get_data_init_count() -> usize {
     unsafe { DATA_INIT_COUNT }
 }
 
+#[cfg(target_os = "linux")]
 use crate::common::types::{Real, from_real, to_real};
 
 #[cfg(target_os = "linux")]
