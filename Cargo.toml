@@ -11,11 +11,32 @@ libc = { version = "0.2.175", default-features = false }
 
 [features]
 default = ["all", "f64"]
-all = ["energy", "fir", "del_dot_vec_2d", "mass3dea"]
+all = [
+    "energy",
+    "fir",
+    "del_dot_vec_2d",
+    "mass3dea",
+    "convection3pda",
+    "diffusion3dpa",
+    "ltimes",
+    "mass3dpa",
+    "massvec3dpa",
+    "matvec_3d_stencil",
+    "pressure",
+    "vol3d",
+]
 energy = []
 fir = []
 del_dot_vec_2d = []
 mass3dea = []
+convection3pda = []
+diffusion3dpa = []
+ltimes = []
+mass3dpa = []
+massvec3dpa = []
+matvec_3d_stencil = []
+pressure = []
+vol3d = []
 f64 = []
 a64 = []
 
