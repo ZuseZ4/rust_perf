@@ -126,6 +126,27 @@ impl KernelBase for DelDotVec2D {
     fn run_kernel(&mut self) {
         let ptiny = to_real(1.0e-20);
         let half = to_real(0.5);
+
+        let x1 = self.x as *const [Real; NNALLS];
+        let x2 = unsafe { self.x.add(1) as *const Real };
+        let x3 = unsafe { self.x.add(1 + JP) as *const Real };
+        let x4 = unsafe { self.x.add(JP) as *const Real };
+
+        let y1 = self.y as *const [Real; NNALLS];
+        let y2 = unsafe { self.y.add(1) as *const Real };
+        let y3 = unsafe { self.y.add(1 + JP) as *const Real };
+        let y4 = unsafe { self.y.add(JP) as *const Real };
+
+        let fx1 = self.xdot as *const [Real; NNALLS];
+        let fx2 = unsafe { self.xdot.add(1) as *const Real };
+        let fx3 = unsafe { self.xdot.add(1 + JP) as *const Real };
+        let fx4 = unsafe { self.xdot.add(JP) as *const Real };
+
+        let fy1 = self.ydot as *const [Real; NNALLS];
+        let fy2 = unsafe { self.ydot.add(1) as *const Real };
+        let fy3 = unsafe { self.ydot.add(1 + JP) as *const Real };
+        let fy4 = unsafe { self.ydot.add(JP) as *const Real };
+
         unsafe {
             core::intrinsics::offload::<_, _, ()>(
                 _del_dot_vec_2d,
@@ -133,12 +154,23 @@ impl KernelBase for DelDotVec2D {
                 [THREADS_PER_BLOCK, 1, 1],
                 (
                     self.div as *mut [Real; NNALLS],
-                    &*(self.x as *const [Real; NNALLS]),
-                    &*(self.y as *const [Real; NNALLS]),
-                    &*(self.xdot as *const [Real; NNALLS]),
-                    &*(self.ydot as *const [Real; NNALLS]),
+                    &*x1,
+                    x2,
+                    x3,
+                    x4,
+                    &*y1,
+                    y2,
+                    y3,
+                    y4,
+                    &*fx1,
+                    fx2,
+                    fx3,
+                    fx4,
+                    &*fy1,
+                    fy2,
+                    fy3,
+                    fy4,
                     &*(self.real_zones as *const [usize; N_REAL_ZONES]),
-                    JP,
                     half,
                     ptiny,
                     N_REAL_ZONES,
@@ -173,12 +205,23 @@ impl KernelBase for DelDotVec2D {
 unsafe extern "C" {
     pub fn _del_dot_vec_2d(
         div: *mut [Real; NNALLS],
-        x: &[Real; NNALLS],
-        y: &[Real; NNALLS],
-        xdot: &[Real; NNALLS],
-        ydot: &[Real; NNALLS],
+        x1: &[Real; NNALLS],
+        x2: *const Real,
+        x3: *const Real,
+        x4: *const Real,
+        y1: &[Real; NNALLS],
+        y2: *const Real,
+        y3: *const Real,
+        y4: *const Real,
+        fx1: &[Real; NNALLS],
+        fx2: *const Real,
+        fx3: *const Real,
+        fx4: *const Real,
+        fy1: &[Real; NNALLS],
+        fy2: *const Real,
+        fy3: *const Real,
+        fy4: *const Real,
         real_zones: &[usize; N_REAL_ZONES],
-        jp: usize,
         half: Real,
         ptiny: Real,
         iend: usize,
@@ -193,12 +236,23 @@ use crate::common::types::{Real, RealExt};
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
     div: &mut [Real; NNALLS],
-    x: &[Real; NNALLS],
-    y: &[Real; NNALLS],
-    xdot: &[Real; NNALLS],
-    ydot: &[Real; NNALLS],
+    x1: &[Real; NNALLS],
+    x2: *const Real,
+    x3: *const Real,
+    x4: *const Real,
+    y1: &[Real; NNALLS],
+    y2: *const Real,
+    y3: *const Real,
+    y4: *const Real,
+    fx1: &[Real; NNALLS],
+    fx2: *const Real,
+    fx3: *const Real,
+    fx4: *const Real,
+    fy1: &[Real; NNALLS],
+    fy2: *const Real,
+    fy3: *const Real,
+    fy4: *const Real,
     real_zones: &[usize; N_REAL_ZONES],
-    jp: usize,
     half: Real,
     ptiny: Real,
     iend: usize,
@@ -207,40 +261,26 @@ pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
     if ii < iend {
         let i = real_zones[ii];
 
-        let x1 = x[i];
-        let x2 = x[i + 1];
-        let x3 = x[i + 1 + jp];
-        let x4 = x[i + jp];
+        let xi = half * (x1[i] + *x2.add(i) - *x3.add(i) - *x4.add(i));
+        let xj = half * (*x2.add(i) + *x3.add(i) - *x4.add(i) - x1[i]);
 
-        let y1 = y[i];
-        let y2 = y[i + 1];
-        let y3 = y[i + 1 + jp];
-        let y4 = y[i + jp];
+        let yi = half * (y1[i] + *y2.add(i) - *y3.add(i) - *y4.add(i));
+        let yj = half * (*y2.add(i) + *y3.add(i) - *y4.add(i) - y1[i]);
 
-        let fx1 = xdot[i];
-        let fx2 = xdot[i + 1];
-        let fx3 = xdot[i + 1 + jp];
-        let fx4 = xdot[i + jp];
+        let fxi = half * (fx1[i] + *fx2.add(i) - *fx3.add(i) - *fx4.add(i));
+        let fxj = half * (*fx2.add(i) + *fx3.add(i) - *fx4.add(i) - fx1[i]);
 
-        let fy1 = ydot[i];
-        let fy2 = ydot[i + 1];
-        let fy3 = ydot[i + 1 + jp];
-        let fy4 = ydot[i + jp];
-
-        let xi = half * (x2 - x4 + x1 - x3);
-        let xj = half * (x3 - x1 + x2 - x4);
-        let yi = half * (y2 - y4 + y1 - y3);
-        let yj = half * (y3 - y1 + y2 - y4);
-
-        let fxi = half * (fx2 - fx4 + fx1 - fx3);
-        let fxj = half * (fx3 - fx1 + fx2 - fx4);
-        let fyi = half * (fy2 - fy4 + fy1 - fy3);
-        let fyj = half * (fy3 - fy1 + fy2 - fy4);
+        let fyi = half * (fy1[i] + *fy2.add(i) - *fy3.add(i) - *fy4.add(i));
+        let fyj = half * (*fy2.add(i) + *fy3.add(i) - *fy4.add(i) - fy1[i]);
 
         let rarea = Real::from(1.0) / (xi * yj - xj * yi + ptiny);
+
         let dfxdx = rarea * (fxi * yj - fxj * yi);
+
         let dfydy = rarea * (fyj * xi - fyi * xj);
-        let affine = (fy1 + fy2 + fy3 + fy4) / (y1 + y2 + y3 + y4);
+
+        let affine = (fy1[i] + *fy2.add(i) + *fy3.add(i) + *fy4.add(i))
+            / (y1[i] + *y2.add(i) + *y3.add(i) + *y4.add(i));
 
         div[i] = dfxdx + dfydy + affine;
     }
