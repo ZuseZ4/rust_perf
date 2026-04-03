@@ -235,7 +235,7 @@ use crate::common::types::{Real, RealExt};
 #[unsafe(no_mangle)]
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
-    div: &mut [Real; NNALLS],
+    div: *mut [Real; NNALLS],
     x1: &[Real; NNALLS],
     x2: *const Real,
     x3: *const Real,
@@ -282,6 +282,6 @@ pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
         let affine = (fy1[i] + *fy2.add(i) + *fy3.add(i) + *fy4.add(i))
             / (y1[i] + *y2.add(i) + *y3.add(i) + *y4.add(i));
 
-        div[i] = dfxdx + dfydy + affine;
+        (*div)[i] = dfxdx + dfydy + affine;
     }
 }
