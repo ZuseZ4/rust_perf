@@ -1,0 +1,14 @@
+#[cfg(feature = "del_dot_vec_2d")]
+pub mod del_dot_vec_2d;
+#[cfg(feature = "energy")]
+pub mod energy;
+#[cfg(feature = "fir")]
+pub mod fir;
+#[cfg(feature = "ltimes")]
+pub mod ltimes;
+#[cfg(feature = "matvec_3d_stencil")]
+pub mod matvec_3d_stencil;
+#[cfg(feature = "pressure")]
+pub mod pressure;
+#[cfg(feature = "vol3d")]
+pub mod vol3d;
