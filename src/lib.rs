@@ -9,6 +9,10 @@
 #![feature(core_intrinsics)]
 #![feature(float_algebraic)]
 #![feature(rustc_attrs)]
+#![feature(link_llvm_intrinsics)]
+#![feature(asm_experimental_arch)]
+#![cfg_attr(not(target_os = "linux"), feature(gpu_launch_sized_workgroup_mem))]
+#![cfg_attr(not(target_os = "linux"), feature(gpu_intrinsics))]
 #![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![no_std]
@@ -24,6 +28,8 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 pub mod apps;
 pub mod common;
 
+#[cfg(all(target_os = "linux", feature = "convection3dpa"))]
+use apps::convection3dpa::Convection3DPA;
 #[cfg(all(target_os = "linux", feature = "del_dot_vec_2d"))]
 use apps::del_dot_vec_2d::DelDotVec2D;
 #[cfg(all(target_os = "linux", feature = "energy"))]
@@ -36,13 +42,15 @@ use apps::ltimes::LTimes;
 
 #[cfg(all(target_os = "linux", feature = "matvec_3d_stencil"))]
 use apps::matvec_3d_stencil::Matvec3DStencil;
-
+#[cfg(all(target_os = "linux", feature = "nodal_accumulation_3d"))]
+use apps::nodal_accumulation_3d::NodalAccumulation3D;
 #[cfg(all(target_os = "linux", feature = "pressure"))]
 use apps::pressure::Pressure;
-
 #[cfg(all(target_os = "linux", feature = "vol3d"))]
 use apps::vol3d::Vol3D;
 
+#[cfg(all(target_os = "linux", feature = "convection3dpa"))]
+static mut K_CONVECTION3DPA: Convection3DPA = Convection3DPA::INIT;
 #[cfg(all(target_os = "linux", feature = "energy"))]
 static mut K_ENERGY: Energy = Energy::INIT;
 #[cfg(all(target_os = "linux", feature = "fir"))]
@@ -68,6 +76,11 @@ fn main() {
     let mut k_links: [Option<&mut dyn KernelBase>; MAX_KERNELS] = [const { None }; MAX_KERNELS];
     let mut count = 0;
 
+    #[cfg(feature = "convection3dpa")]
+    {
+        k_links[count] = Some(unsafe { &mut *(&raw mut K_CONVECTION3DPA) });
+        count += 1;
+    }
     #[cfg(feature = "energy")]
     {
         k_links[count] = Some(unsafe { &mut *(&raw mut K_ENERGY) });

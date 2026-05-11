@@ -1,3 +1,5 @@
+cargo-features = ["panic-immediate-abort"]
+
 [package]
 name = "rust_perf"
 version = "0.1.0"
@@ -12,31 +14,43 @@ libc = { version = "0.2.175", default-features = false }
 [features]
 default = ["all", "f64"]
 all = [
-    "energy",
-    "fir",
+    "convection3dpa",
     "del_dot_vec_2d",
-    "mass3dea",
-    "convection3pda",
     "diffusion3dpa",
+    "edge3d",
+    "energy",
+    "femsweep",
+    "fir",
+    "intsc_hexhex",
     "ltimes",
+    "ltimes_noview",
+    "mass3dea",
     "mass3dpa",
     "massvec3dpa",
     "matvec_3d_stencil",
+    "nodal_accumulation_3d",
     "pressure",
     "vol3d",
+    "zonal_accumulation_3d",
 ]
+convection3dpa = []
+del_dot_vec_2d = []
+diffusion3dpa = []
+edge3d = []
+femsweep = []
 energy = []
 fir = []
-del_dot_vec_2d = []
-mass3dea = []
-convection3pda = []
-diffusion3dpa = []
+intsc_hexhex = []
 ltimes = []
+ltimes_noview = []
+mass3dea = []
 mass3dpa = []
 massvec3dpa = []
 matvec_3d_stencil = []
+nodal_accumulation_3d = []
 pressure = []
 vol3d = []
+zonal_accumulation_3d = []
 f64 = []
 a64 = []
 

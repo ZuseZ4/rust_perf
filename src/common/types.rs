@@ -69,7 +69,12 @@ impl A64 {
 
     #[inline]
     pub fn sqrt(self) -> A64 {
-        A64(core::f64::math::sqrt(self.0))
+        A64(core::intrinsics::sqrtf64(self.0))
+    }
+
+    #[inline]
+    pub fn cbrt(self) -> A64 {
+        A64(core::intrinsics::powf64(self.0, 1.0 / 3.0))
     }
 
     #[inline]
@@ -119,6 +124,7 @@ pub trait RealExt {
     fn to_f64(self) -> f64;
     fn abs(self) -> Self;
     fn sqrt(self) -> Self;
+    fn cbrt(self) -> Self;
 }
 
 impl RealExt for f64 {
@@ -132,7 +138,11 @@ impl RealExt for f64 {
     }
     #[inline]
     fn sqrt(self) -> Self {
-        core::f64::math::sqrt(self)
+        unsafe { core::intrinsics::sqrtf64(self) }
+    }
+    #[inline]
+    fn cbrt(self) -> Self {
+        unsafe { core::intrinsics::powf64(self, 1.0 / 3.0) }
     }
 }
 
@@ -147,6 +157,10 @@ impl RealExt for A64 {
     }
     #[inline]
     fn sqrt(self) -> Self {
-        A64(core::f64::math::sqrt(self.0))
+        A64(unsafe { core::intrinsics::sqrtf64(self.0) })
+    }
+    #[inline]
+    fn cbrt(self) -> Self {
+        A64(unsafe { core::intrinsics::powf64(self.0, 1.0 / 3.0) })
     }
 }
