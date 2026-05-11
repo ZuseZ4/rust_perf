@@ -117,10 +117,65 @@ impl KernelBase for Fir {
     }
 }
 
+enum Region<'a, T> {
+    Element(&'a mut T),
+    Slice(&'a mut [T]),
+}
+
+trait PartitioningStrategy {
+    type Region<'a, T> where T: 'a;
+    fn assign<'a, T>(
+        &self,
+        thread_idx: (usize, usize, usize),
+        block_idx: (usize, usize, usize),
+        block_size: (usize, usize, usize),
+        grid_size: (usize, usize, usize),
+        data: &'a mut [T],
+    ) -> Option<Self::Region<'a, T>>
+    where
+        T: 'a;
+}
+
+struct Linear1D;
+fn compute_linear(
+    thread_idx: (usize, usize, usize),
+    block_idx: (usize, usize, usize),
+    grid_size: (usize, usize, usize),
+) -> usize {
+    let (thread_x, _, _) = thread_idx;
+    let (block_x, _, _) = block_idx;
+    let (grid_x, _, _) = grid_size;
+    block_x * grid_x + thread_x
+}
+impl PartitioningStrategy for Linear1D {
+    type Region<'a, T>
+        = Region<'a, T>
+    where
+        T: 'a;
+    fn assign<'a, T>(
+        &self,
+        thread_idx: (usize, usize, usize),
+        block_idx: (usize, usize, usize),
+        _block_size: (usize, usize, usize),
+        grid_size: (usize, usize, usize),
+        data: &'a mut [T],
+    ) -> Option<Self::Region<'a, T>>
+    where
+        T: 'a,
+    {
+        let i = compute_linear(thread_idx, block_idx, grid_size);
+        if i < data.len() {
+            Some(Region::Element(data.get_mut(i).unwrap()))
+        } else {
+            None
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 unsafe extern "C" {
     pub fn _fir(
-        m_out: *mut [Real; IEND],
+        m_out: &mut Real,
         m_in: &[Real; IEND + COEFFLEN],
         coeff: &[Real; COEFFLEN],
         iend: usize,
@@ -130,17 +185,18 @@ unsafe extern "C" {
 #[cfg(not(target_os = "linux"))]
 use crate::common::types::Real;
 
+
 #[cfg(not(target_os = "linux"))]
 #[unsafe(no_mangle)]
 #[rustc_offload_kernel]
 pub unsafe extern "gpu-kernel" fn _fir(
-    m_out: *mut [Real; IEND],
+    m_out: Option<Region<'_, Real>>,
     m_in: &[Real; IEND + COEFFLEN],
     coeff: &[Real; COEFFLEN],
     iend: usize,
 ) {
     let i = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
-    if i < iend {
+    if i < iend && m_out.is_some() {
         let mut sum: Real = Real::from(0.0);
         let mut j = 0;
         while j < COEFFLEN {
@@ -149,8 +205,8 @@ pub unsafe extern "gpu-kernel" fn _fir(
             }
             j += 1;
         }
-        unsafe {
-            (*m_out)[i] = sum;
+        if let Some(Region::Element(out)) = m_out {
+            *out = sum;
         }
     }
 }
