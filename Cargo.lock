@@ -13,4 +13,12 @@ name = "rust_perf"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "rustc_offload_frontend",
+]
+
+[[package]]
+name = "rustc_offload_frontend"
+version = "0.1.0"
+dependencies = [
+ "libc",
 ]
