@@ -20,6 +20,54 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 }
 
 /*
+* macro
+*/
+#[macro_export]
+macro_rules! offload {
+    ( $($field:ident = $val:expr),* $(,)? ) => {
+        $crate::offload!(@munch
+            [ $($field = $val),* ];
+            kernel = NONE;
+            grid_dim = ([1, 1, 1]);
+            block_dim = ([1, 1, 1]);
+            args = NONE
+        );
+    };
+
+    (@munch [kernel = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = (SOME $val); grid_dim = $g; block_dim = $b; args = $a);
+    };
+    (@munch [grid_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = ($val); block_dim = $b; args = $a);
+    };
+    (@munch [block_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = $g; block_dim = ($val); args = $a);
+    };
+    (@munch [args = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = $g; block_dim = $b; args = (SOME $val));
+    };
+
+    (@munch [$invalid:ident = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
+        compile_error!(concat!("unkown field ", stringify!($invalid)));
+    };
+
+    (@munch []; kernel = NONE; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
+        compile_error!("missing `kernel`");
+    };
+    (@munch []; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = NONE) => {
+        compile_error!("missing `args`");
+    };
+    (@munch []; kernel = (SOME $kernel:expr); grid_dim = ($grid_dim:expr); block_dim = ($block_dim:expr); args = (SOME $args:expr)) => {
+        core::intrinsics::offload::<_, _, ()>(
+            $kernel,
+            $grid_dim,
+            $block_dim,
+            $args,
+        )
+    };
+}
+
+/*
 * library
 */
 
@@ -258,7 +306,12 @@ fn main() {
     // linear1d
     let mut x = [0.0f64; 256];
     let mut reg = Region::<_, Linear1D>::new(&mut x, ());
-    core::intrinsics::offload::<_, _, ()>(linear1d, [1, 1, 1], [256, 1, 1], (&mut reg,));
+    // core::intrinsics::offload::<_, _, ()>(linear1d, [1, 1, 1], [256, 1, 1], (&mut reg,));
+    offload! {
+        kernel = linear1d,
+        grid_dim = [256, 1, 1],
+        args = (&mut reg,),
+    };
     for i in 0..x.len() {
         assert_eq!(x[i], 42.0 as f64);
     }
@@ -271,14 +324,24 @@ fn main() {
         1.0, 1.0, 1.0, 1.0,
     ];
     let mut reg_stencil = Region::<_, Stencil2D<1>>::new(&mut grid, (4, 4));
-    core::intrinsics::offload::<_, _, ()>(stencil2d, [1, 1, 1], [2, 2, 1], (&mut reg_stencil,));
+    // core::intrinsics::offload::<_, _, ()>(stencil2d, [1, 1, 1], [2, 2, 1], (&mut reg_stencil,));
+    offload! {
+        kernel = stencil2d,
+        block_dim = [2, 2, 1],
+        args = (&mut reg_stencil,),
+    };
     // thread (0, 0, 0) will have center on (x, y) = 1 (index = 5), so (1 + 4 + 1) / 3 = 20
     assert_eq!(grid[5], 2.0);
 
     // stride2d
     let mut blocks = [0.0; 64];
     let mut reg_stride = Region::<_, Stride2D<2, 2, 4, 4>>::new(&mut blocks, (8, 8));
-    core::intrinsics::offload::<_, _, ()>(stride2d, [1, 1, 1], [2, 2, 1], (&mut reg_stride,));
+    // core::intrinsics::offload::<_, _, ()>(stride2d, [1, 1, 1], [2, 2, 1], (&mut reg_stride,));
+    offload! {
+        kernel = stride2d,
+        block_dim = [2, 2, 1],
+        args = (&mut reg_stride,),
+    };
     // thread (0, 0, 0) takes a 2x2 block and writes on the diagonal elements
     assert_eq!(blocks[0], 42.0);
     assert_eq!(blocks[9], 42.0);
