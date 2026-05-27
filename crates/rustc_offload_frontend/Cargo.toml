@@ -1,0 +1,29 @@
+[package]
+name = "rustc_offload_frontend"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "rustc offload feature frontend draft"
+repository = "https://github.com/sa4dus/rustc_offload_frontend"
+readme = "README.md"
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[dependencies]
+libc = { version = "0.2.175", default-features = false }
+
+[features]
+
+[profile.release]
+lto = "fat"
+panic = "abort"
+
+[profile.dev]
+lto = "fat"
+panic = "abort"
