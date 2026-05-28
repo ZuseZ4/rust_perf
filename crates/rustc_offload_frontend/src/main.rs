@@ -65,8 +65,6 @@ fn main() {
         grid_dim = [256, 1, 1],
         args = (&mut reg,),
     };
-    println!("GPU bits: {:064b} value: {:?}", x[0].to_bits(), x[0]);
-    println!("CPU bits: {:064b} value: {:?}", 42.0f64.to_bits(), 42.0);
     for i in 0..x.len() {
         assert_eq!(x[i], 42.0 as f64);
     }
@@ -85,7 +83,7 @@ fn main() {
     assert_eq!(blocks[9], 42.0);
 
     // conv_blur2d
-    let mut input = [
+    let input = [
         0.0, 0.0, 0.0, 0.0, //
         0.0, 9.0, 9.0, 0.0, //
         0.0, 9.0, 9.0, 0.0, //
@@ -93,7 +91,7 @@ fn main() {
     ];
     let mut output = [0.0f64; 16];
 
-    let reg_input = Region::<_, Stencil2D<1>>::new(&mut input, (4, 4));
+    let reg_input = Region::<_, Stencil2D<1>>::new(&input, (4, 4));
     let mut reg_output = Region::<_, Linear2D>::new(&mut output, (4, 4));
     offload! {
         kernel = conv_blur2d,
@@ -120,7 +118,8 @@ fn main() {
 
     offload! {
         kernel = saxpy_kernel,
-        grid_dim = [N as u32, 1, 1],        args = (alpha, &reg_x, &mut reg_y,),
+        grid_dim = [N as u32, 1, 1],
+        args = (alpha, &reg_x, &mut reg_y,),
     };
 
     for i in 0..N {

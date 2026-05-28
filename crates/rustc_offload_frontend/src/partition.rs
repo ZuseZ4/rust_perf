@@ -1,4 +1,5 @@
 use crate::gpu::global_thread_dim;
+use core::convert::From;
 use core::prelude::v1::*;
 
 pub unsafe trait PartitioningStrategy {
@@ -18,22 +19,68 @@ pub unsafe trait PartitioningStrategy {
     ) -> Option<Self::ViewMut<'a, T>>;
 }
 
-pub struct Region<'a, T, S: PartitioningStrategy, B: ?Sized = [T]> {
+pub struct Region<'a, T, S: PartitioningStrategy> {
     ptr: *mut T,
     len: usize,
     pub shape: S::Shape,
-    _marker: core::marker::PhantomData<&'a B>,
+    _marker: core::marker::PhantomData<&'a mut [T]>,
 }
 
-impl<'a, T, S: PartitioningStrategy, B: ?Sized> Region<'a, T, S, B> {
-    pub fn new(data: &'a B, shape: S::Shape) -> Self
-    where
-        B: AsRef<[T]>,
-    {
-        let data_ref = data.as_ref();
+pub struct RawRegion<'a, T> {
+    pub ptr: *mut T,
+    pub len: usize,
+    _marker: core::marker::PhantomData<&'a mut [T]>,
+}
+
+impl<'a, T> From<&'a mut [T]> for RawRegion<'a, T> {
+    fn from(data: &'a mut [T]) -> Self {
         Self {
-            ptr: data_ref.as_ptr() as *mut T,
-            len: data_ref.len(),
+            ptr: data.as_mut_ptr(),
+            len: data.len(),
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T> From<&'a [T]> for RawRegion<'a, T> {
+    fn from(data: &'a [T]) -> Self {
+        Self {
+            ptr: data.as_ptr() as *mut T,
+            len: data.len(),
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T, const N: usize> From<&'a mut [T; N]> for RawRegion<'a, T> {
+    fn from(data: &'a mut [T; N]) -> Self {
+        Self {
+            ptr: data.as_mut_ptr(),
+            len: N,
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T, const N: usize> From<&'a [T; N]> for RawRegion<'a, T> {
+    fn from(data: &'a [T; N]) -> Self {
+        Self {
+            ptr: data.as_ptr() as *mut T,
+            len: N,
+            _marker: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
+    pub fn new<D>(data: D, shape: S::Shape) -> Self
+    where
+        D: Into<RawRegion<'a, T>>,
+    {
+        let raw = data.into();
+        Self {
+            ptr: raw.ptr,
+            len: raw.len,
             shape,
             _marker: core::marker::PhantomData,
         }
