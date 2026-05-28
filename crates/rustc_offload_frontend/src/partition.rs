@@ -18,18 +18,22 @@ pub unsafe trait PartitioningStrategy {
     ) -> Option<Self::ViewMut<'a, T>>;
 }
 
-pub struct Region<'a, T, S: PartitioningStrategy> {
+pub struct Region<'a, T, S: PartitioningStrategy, B: ?Sized = [T]> {
     ptr: *mut T,
     len: usize,
     pub shape: S::Shape,
-    _marker: core::marker::PhantomData<&'a mut [T]>,
+    _marker: core::marker::PhantomData<&'a B>,
 }
 
-impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
-    pub fn new(data: &'a mut [T], shape: S::Shape) -> Self {
+impl<'a, T, S: PartitioningStrategy, B: ?Sized> Region<'a, T, S, B> {
+    pub fn new(data: &'a B, shape: S::Shape) -> Self
+    where
+        B: AsRef<[T]>,
+    {
+        let data_ref = data.as_ref();
         Self {
-            ptr: data.as_mut_ptr(),
-            len: data.len(),
+            ptr: data_ref.as_ptr() as *mut T,
+            len: data_ref.len(),
             shape,
             _marker: core::marker::PhantomData,
         }

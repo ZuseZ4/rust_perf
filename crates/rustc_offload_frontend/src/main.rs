@@ -45,6 +45,13 @@ fn conv_blur2d(input: &Region<f64, Stencil2D<1>>, output: &mut Region<f64, Linea
     }
 }
 
+#[offload_kernel]
+fn saxpy_kernel(alpha: f32, x: &Region<f32, Linear1D>, y: &mut Region<f32, Linear1D>) {
+    if let (Some(val_x), Some(val_y)) = (x.get(), y.get_mut()) {
+        *val_y = alpha * (*val_x) + (*val_y);
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn main() {
     use rustc_offload_frontend::offload;
@@ -58,6 +65,8 @@ fn main() {
         grid_dim = [256, 1, 1],
         args = (&mut reg,),
     };
+    println!("GPU bits: {:064b} value: {:?}", x[0].to_bits(), x[0]);
+    println!("CPU bits: {:064b} value: {:?}", 42.0f64.to_bits(), 42.0);
     for i in 0..x.len() {
         assert_eq!(x[i], 42.0 as f64);
     }
@@ -76,24 +85,47 @@ fn main() {
     assert_eq!(blocks[9], 42.0);
 
     // conv_blur2d
-    let mut input_data = [
+    let mut input = [
         0.0, 0.0, 0.0, 0.0, //
         0.0, 9.0, 9.0, 0.0, //
         0.0, 9.0, 9.0, 0.0, //
         0.0, 0.0, 0.0, 0.0, //
     ];
-    let mut output_data = [0.0f64; 16];
+    let mut output = [0.0f64; 16];
 
-    let reg_input = Region::<_, Stencil2D<1>>::new(&mut input_data, (4, 4));
-    let mut reg_output = Region::<_, Linear2D>::new(&mut output_data, (4, 4));
-
+    let reg_input = Region::<_, Stencil2D<1>>::new(&mut input, (4, 4));
+    let mut reg_output = Region::<_, Linear2D>::new(&mut output, (4, 4));
     offload! {
         kernel = conv_blur2d,
         block_dim = [4, 4, 1],
         args = (&reg_input, &mut reg_output,),
     };
 
-    println!("{:#?}", output_data);
+    let expected = [
+        1.0, 2.0, 2.0, 1.0, //
+        2.0, 4.0, 4.0, 2.0, //
+        2.0, 4.0, 4.0, 2.0, //
+        1.0, 2.0, 2.0, 1.0, //
+    ];
+    assert_eq!(output, expected);
+
+    // saxpy
+    const N: usize = 512;
+    let alpha: f32 = 2.5;
+    let x: [f32; N] = [2.0; N];
+    let mut y: [f32; N] = [1.0; N];
+
+    let reg_x = Region::<_, Linear1D>::new(&x, ());
+    let mut reg_y = Region::<_, Linear1D>::new(&mut y, ());
+
+    offload! {
+        kernel = saxpy_kernel,
+        grid_dim = [N as u32, 1, 1],        args = (alpha, &reg_x, &mut reg_y,),
+    };
+
+    for i in 0..N {
+        assert_eq!(y[i], 6.0f32);
+    }
 
     println!("all checks passed!");
 }
