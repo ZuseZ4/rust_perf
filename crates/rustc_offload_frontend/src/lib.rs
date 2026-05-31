@@ -20,38 +20,43 @@ macro_rules! offload {
             kernel = NONE;
             grid_dim = ([1, 1, 1]);
             block_dim = ([1, 1, 1]);
+            dyn_cache = (0);
             args = NONE
         );
     };
 
-    (@munch [kernel = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = (SOME $val); grid_dim = $g; block_dim = $b; args = $a);
+    (@munch [kernel = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = (SOME $val); grid_dim = $g; block_dim = $b; dyn_cache = $d; args = $a);
     };
-    (@munch [grid_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = ($val); block_dim = $b; args = $a);
+    (@munch [grid_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = ($val); block_dim = $b; dyn_cache = $d; args = $a);
     };
-    (@munch [block_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = $g; block_dim = ($val); args = $a);
+    (@munch [block_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = $g; block_dim = ($val); dyn_cache = $d; args = $a);
     };
-    (@munch [args = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = $g; block_dim = $b; args = (SOME $val));
+    (@munch [dyn_cache = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = $g; block_dim = $b; dyn_cache = ($val); args = $a);
+    };
+    (@munch [args = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = $a:tt) => {
+        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; grid_dim = $g; block_dim = $b; dyn_cache = $d; args = (SOME $val));
     };
 
-    (@munch [$invalid:ident = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
-        compile_error!(concat!("unkown field ", stringify!($invalid)));
+    (@munch [$invalid:ident = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = $a:tt) => {
+        compile_error!(concat!("unknown field ", stringify!($invalid)));
     };
 
-    (@munch []; kernel = NONE; grid_dim = $g:tt; block_dim = $b:tt; args = $a:tt) => {
+    (@munch []; kernel = NONE; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = $a:tt) => {
         compile_error!("missing `kernel`");
     };
-    (@munch []; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; args = NONE) => {
+    (@munch []; kernel = $k:tt; grid_dim = $g:tt; block_dim = $b:tt; dyn_cache = $d:tt; args = NONE) => {
         compile_error!("missing `args`");
     };
-    (@munch []; kernel = (SOME $kernel:expr); grid_dim = ($grid_dim:expr); block_dim = ($block_dim:expr); args = (SOME $args:expr)) => {
+    (@munch []; kernel = (SOME $kernel:expr); grid_dim = ($grid_dim:expr); block_dim = ($block_dim:expr); dyn_cache = ($dyn_cache:expr); args = (SOME $args:expr)) => {
         core::intrinsics::offload::<_, _, ()>(
             $kernel,
             $grid_dim,
             $block_dim,
+            $dyn_cache,
             $args,
         )
     };

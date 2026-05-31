@@ -37,7 +37,9 @@ fn conv_blur2d(input: &Region<f64, Stencil2D<1>>, output: &mut Region<f64, Linea
 
         for dy in -1..=1 {
             for dx in -1..=1 {
-                sum += in_view.get_neighbour(dx, dy);
+                if let Some(v) = in_view.get_neighbour(dx, dy) {
+                    sum += v;
+                }
             }
         }
 

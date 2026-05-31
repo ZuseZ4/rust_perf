@@ -166,15 +166,23 @@ pub struct StencilView<'a, T> {
     base_ptr: *const T,
     center_idx: usize,
     cols: usize,
+    rows: usize,
     _marker: core::marker::PhantomData<&'a T>,
 }
 
 impl<'a, T> StencilView<'a, T> {
-    pub fn get_neighbour(&self, ox: isize, oy: isize) -> &T {
-        unsafe {
-            &*self
-                .base_ptr
-                .offset((self.center_idx as isize) + (oy * self.cols as isize) + ox)
+    pub fn get_neighbour(&self, ox: isize, oy: isize) -> Option<&T> {
+        let cx = (self.center_idx % self.cols) as isize;
+        let cy = (self.center_idx / self.cols) as isize;
+
+        let nx = cx + ox;
+        let ny = cy + oy;
+
+        if nx >= 0 && nx < self.cols as isize && ny >= 0 && ny < self.rows as isize {
+            let offset = ny * (self.cols as isize) + nx;
+            Some(unsafe { &*self.base_ptr.offset(offset) })
+        } else {
+            None
         }
     }
 }
@@ -189,7 +197,7 @@ unsafe impl<const R: usize> PartitioningStrategy for Stencil2D<R> {
         len: usize,
         shape: Self::Shape,
     ) -> Option<Self::View<'a, T>> {
-        let (cols, _rows) = shape;
+        let (cols, rows) = shape;
         let tid = global_thread_dim();
 
         let center_idx = tid.y * cols + tid.x;
@@ -199,6 +207,7 @@ unsafe impl<const R: usize> PartitioningStrategy for Stencil2D<R> {
                 base_ptr: ptr,
                 center_idx,
                 cols,
+                rows,
                 _marker: core::marker::PhantomData,
             })
         } else {
