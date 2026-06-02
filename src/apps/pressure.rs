@@ -95,6 +95,7 @@ impl KernelBase for Pressure {
             _pressure_calc1,
             grid,
             block,
+            0,
             (
                 self.bvc as *mut [Real; N_DEFAULT],
                 self.compression as *const [Real; N_DEFAULT],
@@ -107,6 +108,7 @@ impl KernelBase for Pressure {
             _pressure_calc2,
             grid,
             block,
+            0,
             (
                 self.p_new as *mut [Real; N_DEFAULT],
                 self.bvc as *const [Real; N_DEFAULT],

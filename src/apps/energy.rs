@@ -257,6 +257,7 @@ unsafe fn energycalc1(
         _energycalc1,
         [BLOCKS, 1, 1],
         [THREADS_PER_BLOCK, 1, 1],
+        0,
         (e_new, e_old, delvc, p_old, q_old, work, iend),
     )
 }
@@ -278,6 +279,7 @@ unsafe fn energycalc2(
         _energycalc2,
         [BLOCKS, 1, 1],
         [THREADS_PER_BLOCK, 1, 1],
+        0,
         (
             delvc,
             q_new,
@@ -307,6 +309,7 @@ unsafe fn energycalc3(
         _energycalc3,
         [BLOCKS, 1, 1],
         [THREADS_PER_BLOCK, 1, 1],
+        0,
         (e_new, delvc, p_old, q_old, p_half_step, q_new, iend),
     )
 }
@@ -322,6 +325,7 @@ unsafe fn energycalc4(
         _energycalc4,
         [BLOCKS, 1, 1],
         [THREADS_PER_BLOCK, 1, 1],
+        0,
         (e_new, work, e_cut, emin, iend),
     )
 }
@@ -348,6 +352,7 @@ unsafe fn energycalc5(
         _energycalc5,
         [BLOCKS, 1, 1],
         [THREADS_PER_BLOCK, 1, 1],
+        0,
         (
             delvc,
             pbvc,
@@ -387,6 +392,7 @@ unsafe fn energycalc6(
         _energycalc6,
         [BLOCKS, 1, 1],
         [THREADS_PER_BLOCK, 1, 1],
+        0,
         (
             delvc, pbvc, e_new, vnewc, bvc, p_new, q_new, ql_old, qq_old, rho0, q_cut, iend,
         ),

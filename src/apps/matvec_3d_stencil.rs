@@ -130,6 +130,7 @@ impl KernelBase for Matvec3DStencil {
             _matvec3dstencil,
             [n.div_ceil(256) as u32, 1, 1],
             [256, 1, 1],
+            0,
             (
                 self.x as *const [Real; 1124864],
                 self.b as *mut [Real; 1124864],

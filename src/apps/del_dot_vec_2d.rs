@@ -152,6 +152,7 @@ impl KernelBase for DelDotVec2D {
                 _del_dot_vec_2d,
                 [BLOCKS, 1, 1],
                 [THREADS_PER_BLOCK, 1, 1],
+                0,
                 (
                     self.div as *mut [Real; NNALLS],
                     &*x1,

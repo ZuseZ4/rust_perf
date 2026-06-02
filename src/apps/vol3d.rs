@@ -125,6 +125,7 @@ impl KernelBase for Vol3D {
             _vol3d,
             [((count + 255) / 256) as u32, 1, 1],
             [256, 1, 1],
+            0,
             (
                 self.x as *const [Real; 1124864],
                 self.y as *const [Real; 1124864],

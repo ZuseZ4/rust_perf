@@ -105,6 +105,7 @@ impl KernelBase for LTimes {
             _ltimes,
             [grid_x as u32, grid_y as u32, grid_z as u32],
             [m_block as u32, g_block as u32, z_block as u32],
+            0,
             (
                 self.phidat as *mut [Real; 390400],
                 self.elldat as *const [Real; 1600],

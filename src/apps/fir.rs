@@ -93,6 +93,7 @@ impl KernelBase for Fir {
                 _fir,
                 [BLOCKS, 1, 1],
                 [THREADS_PER_BLOCK, 1, 1],
+                0,
                 (
                     self.m_out as *mut [Real; IEND],
                     &*(self.m_in as *const [Real; IEND + COEFFLEN]),
