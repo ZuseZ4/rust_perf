@@ -3,7 +3,7 @@
 #![allow(improper_ctypes)]
 #![allow(improper_gpu_kernel_arg)]
 #![allow(improper_ctypes_definitions)]
-#![feature(gpu_offload)]
+#![feature(gpu_offload, offload)]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![cfg_attr(target_arch = "nvptx64", no_std)]
 

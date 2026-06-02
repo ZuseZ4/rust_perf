@@ -4,7 +4,7 @@
 #![allow(improper_gpu_kernel_arg)]
 #![allow(improper_ctypes_definitions)]
 #![feature(gpu_offload)]
-#![cfg_attr(target_os = "linux", feature(core_intrinsics))]
+#![cfg_attr(target_os = "linux", feature(core_intrinsics, offload))]
 #![cfg_attr(target_arch = "nvptx64", feature(abi_gpu_kernel))]
 #![cfg_attr(target_arch = "nvptx64", no_std)]
 #![cfg_attr(target_arch = "nvptx64", no_main)]
@@ -15,18 +15,21 @@ extern crate libc;
 use rustc_offload_frontend::offload_kernel;
 use rustc_offload_frontend::partition::{Linear1D, Linear2D, Region, Stride2D};
 
+#[cfg(target_os = "linux")]
+use core::offload::offload::{PreloadMut, preload_mut};
+
 #[cfg(target_arch = "nvptx64")]
 use rustc_offload_frontend::partition::PartitioningStrategy;
 
 #[offload_kernel]
-fn linear1d(x: &mut Region<f64, Linear1D>) {
+fn linear1d(mut x: Region<f64, Linear1D>) {
     if let Some(e) = x.get_mut() {
         *e = 42.0;
     }
 }
 
 #[offload_kernel]
-fn stride2d(grid: &mut Region<f64, Stride2D<2, 2, 4, 4, 8>>) {
+fn stride2d(mut grid: Region<f64, Stride2D<2, 2, 4, 4, 8>>) {
     if let Some(mut view) = grid.get_mut() {
         view.set(0, 0, 42.0);
         view.set(1, 1, 42.0);
@@ -34,7 +37,7 @@ fn stride2d(grid: &mut Region<f64, Stride2D<2, 2, 4, 4, 8>>) {
 }
 
 #[offload_kernel]
-fn conv_blur2d(input: &[f64], output: &mut Region<f64, Linear2D<4>>) {
+fn conv_blur2d(input: &[f64], mut output: Region<f64, Linear2D<4>>) {
     if let Some(out_cell) = output.get_mut() {
         let mut sum = 0.0;
 
@@ -52,7 +55,7 @@ fn conv_blur2d(input: &[f64], output: &mut Region<f64, Linear2D<4>>) {
 }
 
 #[offload_kernel]
-fn saxpy_kernel(alpha: f32, x: &[f32], y: &mut Region<f32, Linear1D>) {
+fn saxpy_kernel(alpha: f32, x: &[f32], mut y: Region<f32, Linear1D>) {
     if let (Some(val_x), Some(val_y)) = (x.get(Linear1D::index()), y.get_mut()) {
         *val_y = alpha * (*val_x) + (*val_y);
     }
@@ -64,13 +67,14 @@ fn main() {
 
     // linear1d
     let mut x = [0.0f64; 256];
-    let mut reg = Region::<_, Linear1D>::new(&mut x);
-    // core::intrinsics::offload::<_, _, ()>(linear1d, [1, 1, 1], [256, 1, 1], (&mut reg,));
+    let p: PreloadMut<[f64; 256]> = preload_mut(&mut x);
+    let mut reg = Region::<'_, _, Linear1D>::from(&p);
     offload! {
         kernel = linear1d,
         grid_dim = [256, 1, 1],
-        args = (&mut reg,),
+        args = (reg,),
     };
+    drop(p);
     for i in 0..x.len() {
         assert_eq!(x[i], 42.0 as f64);
     }
@@ -78,13 +82,14 @@ fn main() {
 
     // stride2d
     let mut blocks = [0.0; 64];
-    let mut reg_stride = Region::<_, Stride2D<2, 2, 4, 4, 8>>::new(&mut blocks);
-    // core::intrinsics::offload::<_, _, ()>(stride2d, [1, 1, 1], [2, 2, 1], (&mut reg_stride,));
+    let p: PreloadMut<[f64; 64]> = preload_mut(&mut blocks);
+    let mut reg_stride = Region::<_, Stride2D<2, 2, 4, 4, 8>>::from(&p);
     offload! {
         kernel = stride2d,
         block_dim = [2, 2, 1],
-        args = (&mut reg_stride,),
+        args = (reg_stride,),
     };
+    drop(p);
     // thread (0, 0, 0) takes a 2x2 block and writes on the diagonal elements
     assert_eq!(blocks[0], 42.0);
     assert_eq!(blocks[9], 42.0);
@@ -98,13 +103,14 @@ fn main() {
         0.0, 0.0, 0.0, 0.0, //
     ];
     let mut output = [0.0f64; 16];
-
-    let mut reg_output = Region::<_, Linear2D<4>>::new(&mut output);
+    let p: PreloadMut<[f64; 16]> = preload_mut(&mut output);
+    let mut reg_output = Region::<_, Linear2D<4>>::from(&p);
     offload! {
         kernel = conv_blur2d,
         block_dim = [4, 4, 1],
-        args = (&input as &[f64], &mut reg_output,),
+        args = (&input as &[f64], reg_output,),
     };
+    drop(p);
 
     let expected = [
         1.0, 2.0, 2.0, 1.0, //
@@ -120,14 +126,15 @@ fn main() {
     let alpha: f32 = 2.5;
     let x: [f32; N] = [2.0; N];
     let mut y: [f32; N] = [1.0; N];
-
-    let mut reg_y = Region::<_, Linear1D>::new(&mut y);
+    let p: PreloadMut<[f32; N]> = preload_mut(&mut y);
+    let mut reg_y = Region::<_, Linear1D>::from(&p);
 
     offload! {
         kernel = saxpy_kernel,
         grid_dim = [N as u32, 1, 1],
-        args = (alpha, &x as &[f32], &mut reg_y,),
+        args = (alpha, &x as &[f32], reg_y,),
     };
+    drop(p);
 
     for i in 0..N {
         assert_eq!(y[i], 6.0f32);

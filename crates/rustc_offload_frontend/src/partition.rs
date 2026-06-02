@@ -1,6 +1,7 @@
 use crate::gpu::global_thread_dim;
 use core::convert::From;
 use core::prelude::v1::*;
+use core::offload::offload::PreloadMut;
 
 pub unsafe trait PartitioningStrategy {
     type View<'a, T: 'a>;
@@ -15,6 +16,19 @@ pub struct Region<'a, T, S: PartitioningStrategy> {
     ptr: *mut T,
     len: usize,
     _marker: core::marker::PhantomData<(&'a mut [T], S)>,
+}
+
+impl<'a, T, const N: usize, S> From<&PreloadMut<'a, [T; N]>> for Region<'a, T, S>
+where
+    S: PartitioningStrategy,
+{
+    fn from(p: &PreloadMut<'a, [T; N]>) -> Self {
+        Self {
+            ptr: p.cpu_ptr as *mut T,
+            len: N,
+            _marker: core::marker::PhantomData,
+        }
+    }
 }
 
 pub struct RawRegion<'a, T> {
