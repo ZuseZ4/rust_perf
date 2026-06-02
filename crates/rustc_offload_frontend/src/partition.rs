@@ -3,27 +3,18 @@ use core::convert::From;
 use core::prelude::v1::*;
 
 pub unsafe trait PartitioningStrategy {
-    type Shape: Copy;
     type View<'a, T: 'a>;
     type ViewMut<'a, T: 'a>;
 
-    unsafe fn get<'a, T>(
-        ptr: *const T,
-        len: usize,
-        shape: Self::Shape,
-    ) -> Option<Self::View<'a, T>>;
-    unsafe fn get_mut<'a, T>(
-        ptr: *mut T,
-        len: usize,
-        shape: Self::Shape,
-    ) -> Option<Self::ViewMut<'a, T>>;
+    fn index() -> usize;
+    unsafe fn get<'a, T>(ptr: *const T, len: usize) -> Option<Self::View<'a, T>>;
+    unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>>;
 }
 
 pub struct Region<'a, T, S: PartitioningStrategy> {
     ptr: *mut T,
     len: usize,
-    pub shape: S::Shape,
-    _marker: core::marker::PhantomData<&'a mut [T]>,
+    _marker: core::marker::PhantomData<(&'a mut [T], S)>,
 }
 
 pub struct RawRegion<'a, T> {
@@ -42,16 +33,6 @@ impl<'a, T> From<&'a mut [T]> for RawRegion<'a, T> {
     }
 }
 
-impl<'a, T> From<&'a [T]> for RawRegion<'a, T> {
-    fn from(data: &'a [T]) -> Self {
-        Self {
-            ptr: data.as_ptr() as *mut T,
-            len: data.len(),
-            _marker: core::marker::PhantomData,
-        }
-    }
-}
-
 impl<'a, T, const N: usize> From<&'a mut [T; N]> for RawRegion<'a, T> {
     fn from(data: &'a mut [T; N]) -> Self {
         Self {
@@ -62,18 +43,8 @@ impl<'a, T, const N: usize> From<&'a mut [T; N]> for RawRegion<'a, T> {
     }
 }
 
-impl<'a, T, const N: usize> From<&'a [T; N]> for RawRegion<'a, T> {
-    fn from(data: &'a [T; N]) -> Self {
-        Self {
-            ptr: data.as_ptr() as *mut T,
-            len: N,
-            _marker: core::marker::PhantomData,
-        }
-    }
-}
-
 impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
-    pub fn new<D>(data: D, shape: S::Shape) -> Self
+    pub fn new<D>(data: D) -> Self
     where
         D: Into<RawRegion<'a, T>>,
     {
@@ -81,76 +52,38 @@ impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
         Self {
             ptr: raw.ptr,
             len: raw.len,
-            shape,
             _marker: core::marker::PhantomData,
         }
     }
 
     pub fn get(&self) -> Option<S::View<'_, T>> {
-        unsafe { S::get(self.ptr as *const T, self.len, self.shape) }
+        unsafe { S::get(self.ptr as *const T, self.len) }
     }
 
     pub fn get_mut(&mut self) -> Option<S::ViewMut<'_, T>> {
-        unsafe { S::get_mut(self.ptr, self.len, self.shape) }
+        unsafe { S::get_mut(self.ptr, self.len) }
     }
 }
 
 // linear1d
 pub struct Linear1D;
 unsafe impl PartitioningStrategy for Linear1D {
-    type Shape = ();
     type View<'a, T: 'a> = &'a T;
     type ViewMut<'a, T: 'a> = &'a mut T;
 
-    unsafe fn get<'a, T>(ptr: *const T, len: usize, _: Self::Shape) -> Option<Self::View<'a, T>> {
-        let tid = global_thread_dim().x;
-        if tid < len {
-            Some(unsafe { &*ptr.add(tid) })
-        } else {
-            None
-        }
+    fn index() -> usize {
+        global_thread_dim().x
     }
-    unsafe fn get_mut<'a, T>(
-        ptr: *mut T,
-        len: usize,
-        _: Self::Shape,
-    ) -> Option<Self::ViewMut<'a, T>> {
-        let tid = global_thread_dim().x;
-        if tid < len {
-            Some(unsafe { &mut *ptr.add(tid) })
-        } else {
-            None
-        }
-    }
-}
-
-// linear2d
-pub struct Linear2D;
-unsafe impl PartitioningStrategy for Linear2D {
-    type Shape = (usize, usize);
-    type View<'a, T: 'a> = &'a T;
-    type ViewMut<'a, T: 'a> = &'a mut T;
-
-    unsafe fn get<'a, T>(
-        ptr: *const T,
-        len: usize,
-        shape: Self::Shape,
-    ) -> Option<Self::View<'a, T>> {
-        let tid = global_thread_dim();
-        let idx = tid.y * shape.0 + tid.x;
+    unsafe fn get<'a, T>(ptr: *const T, len: usize) -> Option<Self::View<'a, T>> {
+        let idx = Self::index();
         if idx < len {
             Some(unsafe { &*ptr.add(idx) })
         } else {
             None
         }
     }
-    unsafe fn get_mut<'a, T>(
-        ptr: *mut T,
-        len: usize,
-        shape: Self::Shape,
-    ) -> Option<Self::ViewMut<'a, T>> {
-        let tid = global_thread_dim();
-        let idx = tid.y * shape.0 + tid.x;
+    unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>> {
+        let idx = Self::index();
         if idx < len {
             Some(unsafe { &mut *ptr.add(idx) })
         } else {
@@ -159,64 +92,31 @@ unsafe impl PartitioningStrategy for Linear2D {
     }
 }
 
-// stencil2d
-pub struct Stencil2D<const RADIUS: usize>;
+// linear2d
+pub struct Linear2D<const W: usize>;
+unsafe impl<const W: usize> PartitioningStrategy for Linear2D<W> {
+    type View<'a, T: 'a> = &'a T;
+    type ViewMut<'a, T: 'a> = &'a mut T;
 
-pub struct StencilView<'a, T> {
-    base_ptr: *const T,
-    center_idx: usize,
-    cols: usize,
-    rows: usize,
-    _marker: core::marker::PhantomData<&'a T>,
-}
-
-impl<'a, T> StencilView<'a, T> {
-    pub fn get_neighbour(&self, ox: isize, oy: isize) -> Option<&T> {
-        let cx = (self.center_idx % self.cols) as isize;
-        let cy = (self.center_idx / self.cols) as isize;
-
-        let nx = cx + ox;
-        let ny = cy + oy;
-
-        if nx >= 0 && nx < self.cols as isize && ny >= 0 && ny < self.rows as isize {
-            let offset = ny * (self.cols as isize) + nx;
-            Some(unsafe { &*self.base_ptr.offset(offset) })
-        } else {
-            None
-        }
-    }
-}
-
-unsafe impl<const R: usize> PartitioningStrategy for Stencil2D<R> {
-    type Shape = (usize, usize);
-    type View<'a, T: 'a> = StencilView<'a, T>;
-    type ViewMut<'a, T: 'a> = core::marker::PhantomData<&'a mut T>;
-
-    unsafe fn get<'a, T>(
-        ptr: *const T,
-        len: usize,
-        shape: Self::Shape,
-    ) -> Option<Self::View<'a, T>> {
-        let (cols, rows) = shape;
+    fn index() -> usize {
         let tid = global_thread_dim();
-
-        let center_idx = tid.y * cols + tid.x;
-
-        if center_idx < len {
-            Some(StencilView {
-                base_ptr: ptr,
-                center_idx,
-                cols,
-                rows,
-                _marker: core::marker::PhantomData,
-            })
+        tid.y * W + tid.x
+    }
+    unsafe fn get<'a, T>(ptr: *const T, len: usize) -> Option<Self::View<'a, T>> {
+        let idx = Self::index();
+        if idx < len {
+            Some(unsafe { &*ptr.add(idx) })
         } else {
             None
         }
     }
-
-    unsafe fn get_mut<'a, T>(_: *mut T, _: usize, _: Self::Shape) -> Option<Self::ViewMut<'a, T>> {
-        None
+    unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>> {
+        let idx = Self::index();
+        if idx < len {
+            Some(unsafe { &mut *ptr.add(idx) })
+        } else {
+            None
+        }
     }
 }
 
@@ -224,49 +124,42 @@ unsafe impl<const R: usize> PartitioningStrategy for Stencil2D<R> {
 pub struct StrideViewMut<'a, T> {
     block_ptr: *mut T,
     stride: usize,
-    width: usize,
-    height: usize,
     _marker: core::marker::PhantomData<&'a mut T>,
 }
 impl<'a, T> StrideViewMut<'a, T> {
     pub fn set(&mut self, x: usize, y: usize, val: T) {
-        if x < self.width && y < self.height {
-            unsafe {
-                *self.block_ptr.add(y * self.stride + x) = val;
-            }
+        unsafe {
+            *self.block_ptr.add(y * self.stride + x) = val;
         }
     }
 }
 
-pub struct Stride2D<const W: usize, const H: usize, const SX: usize, const SY: usize>;
-unsafe impl<const W: usize, const H: usize, const SX: usize, const SY: usize> PartitioningStrategy
-    for Stride2D<W, H, SX, SY>
+pub struct Stride2D<
+    const W: usize,
+    const H: usize,
+    const SX: usize,
+    const SY: usize,
+    const STRIDE: usize,
+>;
+unsafe impl<const W: usize, const H: usize, const SX: usize, const SY: usize, const STRIDE: usize>
+    PartitioningStrategy for Stride2D<W, H, SX, SY, STRIDE>
 {
-    type Shape = (usize, usize);
     type View<'a, T: 'a> = &'a T;
     type ViewMut<'a, T: 'a> = StrideViewMut<'a, T>;
 
-    unsafe fn get<'a, T>(_: *const T, _: usize, _: Self::Shape) -> Option<Self::View<'a, T>> {
+    fn index() -> usize {
+        let tid = global_thread_dim();
+        tid.y * SY * STRIDE + tid.x * SX
+    }
+    unsafe fn get<'a, T>(_: *const T, _: usize) -> Option<Self::View<'a, T>> {
         unimplemented!()
     }
-    unsafe fn get_mut<'a, T>(
-        ptr: *mut T,
-        _: usize,
-        shape: Self::Shape,
-    ) -> Option<Self::ViewMut<'a, T>> {
-        let tid = global_thread_dim();
-        let start_x = tid.x * SX;
-        let start_y = tid.y * SY;
-        if start_x + W <= shape.0 && start_y + H <= shape.1 {
-            Some(StrideViewMut {
-                block_ptr: unsafe { ptr.add(start_y * shape.0 + start_x) },
-                stride: shape.0,
-                width: W,
-                height: H,
-                _marker: core::marker::PhantomData,
-            })
-        } else {
-            None
-        }
+    unsafe fn get_mut<'a, T>(ptr: *mut T, _: usize) -> Option<Self::ViewMut<'a, T>> {
+        let idx = Self::index();
+        Some(StrideViewMut {
+            block_ptr: unsafe { ptr.add(idx) },
+            stride: STRIDE,
+            _marker: core::marker::PhantomData,
+        })
     }
 }
