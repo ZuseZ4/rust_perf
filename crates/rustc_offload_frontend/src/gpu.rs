@@ -19,7 +19,7 @@ pub(crate) fn global_thread_dim() -> Dim3 {
     Dim3 { x: 0, y: 0, z: 0 }
 }
 
-pub (crate) fn block_idx() -> Dim3 {
+pub(crate) fn block_idx() -> Dim3 {
     #[cfg(target_arch = "nvptx64")]
     unsafe {
         use core::arch::nvptx::*;
@@ -33,7 +33,7 @@ pub (crate) fn block_idx() -> Dim3 {
     Dim3 { x: 0, y: 0, z: 0 }
 }
 
-pub (crate) fn block_dim() -> Dim3 {
+pub(crate) fn block_dim() -> Dim3 {
     #[cfg(target_arch = "nvptx64")]
     unsafe {
         use core::arch::nvptx::*;
@@ -47,7 +47,7 @@ pub (crate) fn block_dim() -> Dim3 {
     Dim3 { x: 0, y: 0, z: 0 }
 }
 
-pub (crate) fn thread_idx() -> Dim3 {
+pub(crate) fn thread_idx() -> Dim3 {
     #[cfg(target_arch = "nvptx64")]
     unsafe {
         use core::arch::nvptx::*;

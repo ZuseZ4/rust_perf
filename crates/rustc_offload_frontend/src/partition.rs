@@ -1,7 +1,7 @@
-use crate::gpu::{ global_thread_dim, block_idx, block_dim, thread_idx };
+use crate::gpu::{block_dim, block_idx, global_thread_dim, thread_idx};
 use core::convert::From;
-use core::prelude::v1::*;
 use core::offload::offload::PreloadMut;
+use core::prelude::v1::*;
 
 pub unsafe trait PartitioningStrategy {
     type View<'a, T: 'a>;
@@ -139,12 +139,8 @@ unsafe impl<const W: usize> PartitioningStrategy for Linear2D<W> {
 
 // stride1d
 #[derive(Debug, Copy, Clone)]
-pub struct Stride1D<
-    const STRIDE: usize,
->;
-unsafe impl<const STRIDE: usize>
-    PartitioningStrategy for Stride1D<STRIDE>
-{
+pub struct Stride1D<const STRIDE: usize>;
+unsafe impl<const STRIDE: usize> PartitioningStrategy for Stride1D<STRIDE> {
     type View<'a, T: 'a> = &'a T;
     type ViewMut<'a, T: 'a> = &'a mut T;
 
@@ -170,7 +166,6 @@ unsafe impl<const STRIDE: usize>
         }
     }
 }
-
 
 // stride2d
 #[derive(Debug, Copy, Clone)]
@@ -260,7 +255,7 @@ unsafe impl<const STRIDE: usize> PartitioningStrategy for OffsetStride1D<STRIDE>
 
     unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>> {
         let idx = Self::index();
-        
+
         if idx < len {
             Some(OffsetStrideViewMut {
                 base_ptr: ptr,
@@ -271,5 +266,63 @@ unsafe impl<const STRIDE: usize> PartitioningStrategy for OffsetStride1D<STRIDE>
         } else {
             None
         }
+    }
+}
+
+// for ltimes
+#[derive(Debug, Copy, Clone)]
+pub struct Stride3D<
+    const BX: usize,
+    const BY: usize,
+    const BZ: usize,
+    const MAX_X: usize,
+    const MAX_Y: usize,
+>;
+
+unsafe impl<
+    const BX: usize,
+    const BY: usize,
+    const BZ: usize,
+    const MAX_X: usize,
+    const MAX_Y: usize,
+> PartitioningStrategy for Stride3D<BX, BY, BZ, MAX_X, MAX_Y>
+{
+    type View<'a, T: 'a> = &'a T;
+    type ViewMut<'a, T: 'a> = &'a mut T;
+
+    fn index() -> usize {
+        let mx = (block_idx().x * BX) + thread_idx().x;
+        let gy = (block_idx().y * BY) + thread_idx().y;
+        let zz = (block_idx().z * BZ) + thread_idx().z;
+
+        mx + MAX_X * (gy + MAX_Y * zz)
+    }
+
+    unsafe fn get<'a, T>(ptr: *const T, len: usize) -> Option<Self::View<'a, T>> {
+        let mx = (block_idx().x * BX) + thread_idx().x;
+        let gy = (block_idx().y * BY) + thread_idx().y;
+        let zz = (block_idx().z * BZ) + thread_idx().z;
+
+        if mx < MAX_X && gy < MAX_Y {
+            let idx = mx + MAX_X * (gy + MAX_Y * zz);
+            if idx < len {
+                return Some(unsafe { &*ptr.add(idx) });
+            }
+        }
+        None
+    }
+
+    unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>> {
+        let mx = (block_idx().x * BX) + thread_idx().x;
+        let gy = (block_idx().y * BY) + thread_idx().y;
+        let zz = (block_idx().z * BZ) + thread_idx().z;
+
+        if mx < MAX_X && gy < MAX_Y {
+            let idx = mx + MAX_X * (gy + MAX_Y * zz);
+            if idx < len {
+                return Some(unsafe { &mut *ptr.add(idx) });
+            }
+        }
+        None
     }
 }
