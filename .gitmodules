@@ -1,0 +1,4 @@
+[submodule "crates/rustc_offload_frontend"]
+	path = crates/rustc_offload_frontend
+	url = https://github.com/sa4dus/rustc_offload_frontend
+	branch = main

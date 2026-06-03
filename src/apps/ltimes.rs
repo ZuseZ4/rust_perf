@@ -3,6 +3,15 @@ pub const NUM_G: usize = 32;
 pub const NUM_M: usize = 25;
 const DEFAULT_REPS: u32 = 50;
 
+use core::offload::offload_kernel;
+use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride3D};
+
+#[cfg(target_os = "linux")]
+use rustc_offload_frontend::offload;
+
+#[cfg(target_os = "linux")]
+use core::offload::offload::{PreloadMut, preload_mut};
+
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{
     _block_idx_x as block_idx_x, _block_idx_y as block_idx_y, _block_idx_z as block_idx_z,
@@ -101,12 +110,16 @@ impl KernelBase for LTimes {
         let grid_y = NUM_G.div_ceil(g_block);
         let grid_z = num_z.div_ceil(z_block);
 
-        core::intrinsics::offload::<_, _, ()>(
-            _ltimes,
-            [grid_x as u32, grid_y as u32, grid_z as u32],
-            [m_block as u32, g_block as u32, z_block as u32],
-            (
-                self.phidat as *mut [Real; 390400],
+        let mut phidat = unsafe { &mut *(self.phidat as *mut [Real; 390400]) };
+        let p: PreloadMut<[Real; 390400]> = preload_mut(&mut phidat);
+        let mut phidat_reg = Region::<'_, _, Stride3D<32, 8, 1, 25, 32>>::from(&p);
+
+        offload! {
+            kernel = ltimes,
+            grid_dim = [grid_x as u32, grid_y as u32, grid_z as u32],
+            block_dim = [m_block as u32, g_block as u32, z_block as u32],
+            args = (
+                phidat_reg,
                 self.elldat as *const [Real; 1600],
                 self.psidat as *const [Real; 999424],
                 NUM_D,
@@ -114,7 +127,7 @@ impl KernelBase for LTimes {
                 NUM_G,
                 num_z,
             ),
-        );
+        };
     }
 
     fn update_checksum(&self) -> f64 {
@@ -135,27 +148,12 @@ impl KernelBase for LTimes {
     }
 }
 
-#[cfg(target_os = "linux")]
-unsafe extern "C" {
-    pub fn _ltimes(
-        phi: *mut [Real; 390400],
-        ell: &[Real; 1600],
-        psi: &[Real; 999424],
-        num_d: usize,
-        num_m: usize,
-        num_g: usize,
-        num_z: usize,
-    );
-}
-
 #[cfg(not(target_os = "linux"))]
 use crate::common::types::Real;
 
-#[cfg(not(target_os = "linux"))]
-#[unsafe(no_mangle)]
-#[rustc_offload_kernel]
-pub unsafe extern "gpu-kernel" fn _ltimes(
-    phi: *mut [Real; 390400],
+#[offload_kernel]
+fn ltimes(
+    mut phi: Region<Real, Stride3D<32, 8, 1, 25, 32>>,
     ell: &[Real; 1600],
     psi: &[Real; 999424],
     num_d: usize,
@@ -163,22 +161,19 @@ pub unsafe extern "gpu-kernel" fn _ltimes(
     num_g: usize,
     num_z: usize,
 ) {
-    let num_m = NUM_M;
-    let num_g = NUM_G;
     let num_d = NUM_D;
+    let num_g = NUM_G;
 
-    let m = (block_idx_x() * 32 + thread_idx_x()) as usize;
-    let g = (block_idx_y() * 8 + thread_idx_y()) as usize;
-    let z = (block_idx_z() * 1 + thread_idx_z()) as usize;
+    let m = unsafe { (block_idx_x() * 32 + thread_idx_x()) as usize };
+    let g = unsafe { (block_idx_y() * 8 + thread_idx_y()) as usize };
+    let z = unsafe { (block_idx_z() * 1 + thread_idx_z()) as usize };
 
-    if m < num_m && g < num_g && z < num_z {
-        let phi_idx = m + num_m * (g + num_g * z);
-
+    if let Some(v) = phi.get_mut() {
         for d in 0..num_d {
             let ell_idx = d + num_d * m;
             let psi_idx = d + num_d * (g + num_g * z);
 
-            (*phi)[phi_idx] += (*ell)[ell_idx] * (*psi)[psi_idx];
+            *v += ell[ell_idx] * psi[psi_idx];
         }
     }
 }

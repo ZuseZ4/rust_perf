@@ -1,6 +1,15 @@
 pub const N_DEFAULT: usize = 1000000;
 const DEFAULT_REPS: u32 = 100;
 
+use core::offload::offload_kernel;
+use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
+
+#[cfg(target_os = "linux")]
+use rustc_offload_frontend::offload;
+
+#[cfg(target_os = "linux")]
+use core::offload::offload::{PreloadMut, preload_mut};
+
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{_block_idx_x as block_idx_x, _thread_idx_x as thread_idx_x};
 
@@ -126,11 +135,11 @@ impl KernelBase for Matvec3DStencil {
         let jp = self.jp;
         let kp = self.kp;
 
-        core::intrinsics::offload::<_, _, ()>(
-            _matvec3dstencil,
-            [n.div_ceil(256) as u32, 1, 1],
-            [256, 1, 1],
-            (
+        offload! {
+            kernel = matvec3dstencil,
+            grid_dim = [n.div_ceil(256) as u32, 1, 1],
+            block_dim = [256, 1, 1],
+            args = (
                 self.x as *const [Real; 1124864],
                 self.b as *mut [Real; 1124864],
                 self.matrix[0] as *const [Real; 1124864],
@@ -152,7 +161,7 @@ impl KernelBase for Matvec3DStencil {
                 kp,
                 n,
             ),
-        );
+        };
     }
 
     fn update_checksum(&self) -> f64 {
@@ -176,39 +185,11 @@ impl KernelBase for Matvec3DStencil {
     }
 }
 
-#[cfg(target_os = "linux")]
-unsafe extern "C" {
-    pub fn _matvec3dstencil(
-        x: *const [Real; 1124864],
-        b: *mut [Real; 1124864],
-        m0: *const [Real; 1124864],
-        m1: *const [Real; 1124864],
-        m2: *const [Real; 1124864],
-        m3: *const [Real; 1124864],
-        m4: *const [Real; 1124864],
-        m5: *const [Real; 1124864],
-        m6: *const [Real; 1124864],
-        m7: *const [Real; 1124864],
-        m8: *const [Real; 1124864],
-        m9: *const [Real; 1124864],
-        m10: *const [Real; 1124864],
-        m11: *const [Real; 1124864],
-        m12: *const [Real; 1124864],
-        m13: *const [Real; 1124864],
-        real_zones: *const [u64; 1000000],
-        jp: usize,
-        kp: usize,
-        n: usize,
-    );
-}
-
 #[cfg(not(target_os = "linux"))]
 use crate::common::types::Real;
 
-#[cfg(not(target_os = "linux"))]
-#[unsafe(no_mangle)]
-#[rustc_offload_kernel]
-pub unsafe extern "gpu-kernel" fn _matvec3dstencil(
+#[offload_kernel]
+fn matvec3dstencil(
     x: *const [Real; 1124864],
     b: *mut [Real; 1124864],
     m0: *const [Real; 1124864],

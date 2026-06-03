@@ -1,0 +1,145 @@
+#![allow(internal_features)]
+#![allow(linker_messages)]
+#![allow(improper_ctypes)]
+#![allow(improper_gpu_kernel_arg)]
+#![allow(improper_ctypes_definitions)]
+#![feature(gpu_offload)]
+#![cfg_attr(target_os = "linux", feature(core_intrinsics, offload))]
+#![cfg_attr(target_arch = "nvptx64", feature(abi_gpu_kernel))]
+#![cfg_attr(target_arch = "nvptx64", no_std)]
+#![cfg_attr(target_arch = "nvptx64", no_main)]
+
+#[cfg(target_os = "linux")]
+extern crate libc;
+
+use rustc_offload_frontend::offload_kernel;
+use rustc_offload_frontend::partition::{Linear1D, Linear2D, Region, Stride2D};
+
+#[cfg(target_os = "linux")]
+use core::offload::offload::{PreloadMut, preload_mut};
+
+#[cfg(target_arch = "nvptx64")]
+use rustc_offload_frontend::partition::PartitioningStrategy;
+
+#[offload_kernel]
+fn linear1d(mut x: Region<f64, Linear1D>) {
+    if let Some(e) = x.get_mut() {
+        *e = 42.0;
+    }
+}
+
+#[offload_kernel]
+fn stride2d(mut grid: Region<f64, Stride2D<2, 2, 4, 4, 8>>) {
+    if let Some(mut view) = grid.get_mut() {
+        view.set(0, 0, 42.0);
+        view.set(1, 1, 42.0);
+    }
+}
+
+#[offload_kernel]
+fn conv_blur2d(input: &[f64], mut output: Region<f64, Linear2D<4>>) {
+    if let Some(out_cell) = output.get_mut() {
+        let mut sum = 0.0;
+
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let idx = (Linear2D::<4>::index() as isize + dy * 4 as isize + dx) as usize;
+                if let Some(v) = input.get(idx) {
+                    sum += v;
+                }
+            }
+        }
+
+        *out_cell = sum / 9.0;
+    }
+}
+
+#[offload_kernel]
+fn saxpy_kernel(alpha: f32, x: &[f32], mut y: Region<f32, Linear1D>) {
+    if let (Some(val_x), Some(val_y)) = (x.get(Linear1D::index()), y.get_mut()) {
+        *val_y = alpha * (*val_x) + (*val_y);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn main() {
+    use rustc_offload_frontend::offload;
+
+    // linear1d
+    let mut x = [0.0f64; 256];
+    let p: PreloadMut<[f64; 256]> = preload_mut(&mut x);
+    let mut reg = Region::<'_, _, Linear1D>::from(&p);
+    offload! {
+        kernel = linear1d,
+        grid_dim = [256, 1, 1],
+        args = (reg,),
+    };
+    drop(p);
+    for i in 0..x.len() {
+        assert_eq!(x[i], 42.0 as f64);
+    }
+    println!("::passed:: linear1d");
+
+    // stride2d
+    let mut blocks = [0.0; 64];
+    let p: PreloadMut<[f64; 64]> = preload_mut(&mut blocks);
+    let mut reg_stride = Region::<_, Stride2D<2, 2, 4, 4, 8>>::from(&p);
+    offload! {
+        kernel = stride2d,
+        block_dim = [2, 2, 1],
+        args = (reg_stride,),
+    };
+    drop(p);
+    // thread (0, 0, 0) takes a 2x2 block and writes on the diagonal elements
+    assert_eq!(blocks[0], 42.0);
+    assert_eq!(blocks[9], 42.0);
+    println!("::passed:: stride2d");
+
+    // conv_blur2d
+    let input = [
+        0.0, 0.0, 0.0, 0.0, //
+        0.0, 9.0, 9.0, 0.0, //
+        0.0, 9.0, 9.0, 0.0, //
+        0.0, 0.0, 0.0, 0.0, //
+    ];
+    let mut output = [0.0f64; 16];
+    let p: PreloadMut<[f64; 16]> = preload_mut(&mut output);
+    let mut reg_output = Region::<_, Linear2D<4>>::from(&p);
+    offload! {
+        kernel = conv_blur2d,
+        block_dim = [4, 4, 1],
+        args = (&input as &[f64], reg_output,),
+    };
+    drop(p);
+
+    let expected = [
+        1.0, 2.0, 2.0, 1.0, //
+        2.0, 4.0, 4.0, 2.0, //
+        2.0, 4.0, 4.0, 2.0, //
+        1.0, 2.0, 2.0, 1.0, //
+    ];
+    assert_eq!(output, expected);
+    println!("::passed:: conv_blur2d");
+
+    // saxpy
+    const N: usize = 512;
+    let alpha: f32 = 2.5;
+    let x: [f32; N] = [2.0; N];
+    let mut y: [f32; N] = [1.0; N];
+    let p: PreloadMut<[f32; N]> = preload_mut(&mut y);
+    let mut reg_y = Region::<_, Linear1D>::from(&p);
+
+    offload! {
+        kernel = saxpy_kernel,
+        grid_dim = [N as u32, 1, 1],
+        args = (alpha, &x as &[f32], reg_y,),
+    };
+    drop(p);
+
+    for i in 0..N {
+        assert_eq!(y[i], 6.0f32);
+    }
+    println!("::passed:: saxpy");
+
+    println!("all checks passed!");
+}
