@@ -3,6 +3,15 @@ pub const NUM_G: usize = 32;
 pub const NUM_M: usize = 25;
 const DEFAULT_REPS: u32 = 50;
 
+use core::offload::offload_kernel;
+use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
+
+#[cfg(target_os = "linux")]
+use rustc_offload_frontend::offload;
+
+#[cfg(target_os = "linux")]
+use core::offload::offload::{PreloadMut, preload_mut};
+
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{
     _block_idx_x as block_idx_x, _block_idx_y as block_idx_y, _block_idx_z as block_idx_z,
@@ -101,12 +110,11 @@ impl KernelBase for LTimes {
         let grid_y = NUM_G.div_ceil(g_block);
         let grid_z = num_z.div_ceil(z_block);
 
-        core::intrinsics::offload::<_, _, ()>(
-            _ltimes,
-            [grid_x as u32, grid_y as u32, grid_z as u32],
-            [m_block as u32, g_block as u32, z_block as u32],
-            0,
-            (
+        offload! {
+            kernel = ltimes,
+            grid_dim = [grid_x as u32, grid_y as u32, grid_z as u32],
+            block_dim = [m_block as u32, g_block as u32, z_block as u32],
+            args = (
                 self.phidat as *mut [Real; 390400],
                 self.elldat as *const [Real; 1600],
                 self.psidat as *const [Real; 999424],
@@ -115,7 +123,7 @@ impl KernelBase for LTimes {
                 NUM_G,
                 num_z,
             ),
-        );
+        };
     }
 
     fn update_checksum(&self) -> f64 {
@@ -136,26 +144,11 @@ impl KernelBase for LTimes {
     }
 }
 
-#[cfg(target_os = "linux")]
-unsafe extern "C" {
-    pub fn _ltimes(
-        phi: *mut [Real; 390400],
-        ell: &[Real; 1600],
-        psi: &[Real; 999424],
-        num_d: usize,
-        num_m: usize,
-        num_g: usize,
-        num_z: usize,
-    );
-}
-
 #[cfg(not(target_os = "linux"))]
 use crate::common::types::Real;
 
-#[cfg(not(target_os = "linux"))]
-#[unsafe(no_mangle)]
-#[rustc_offload_kernel]
-pub unsafe extern "gpu-kernel" fn _ltimes(
+#[offload_kernel]
+fn ltimes(
     phi: *mut [Real; 390400],
     ell: &[Real; 1600],
     psi: &[Real; 999424],

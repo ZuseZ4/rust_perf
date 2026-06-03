@@ -17,6 +17,15 @@ const N_REAL_ZONES: usize = (IMAX - IMIN) * (JMAX - JMIN);
 const THREADS_PER_BLOCK: u32 = 256;
 const BLOCKS: u32 = (N_REAL_ZONES as u32).div_ceil(THREADS_PER_BLOCK);
 
+use core::offload::offload_kernel;
+use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
+
+#[cfg(target_os = "linux")]
+use rustc_offload_frontend::offload;
+
+#[cfg(target_os = "linux")]
+use core::offload::offload::{PreloadMut, preload_mut};
+
 #[cfg(target_arch = "amdgpu")]
 use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
 #[cfg(target_arch = "nvptx64")]
@@ -148,12 +157,11 @@ impl KernelBase for DelDotVec2D {
         let fy4 = unsafe { self.ydot.add(JP) as *const Real };
 
         unsafe {
-            core::intrinsics::offload::<_, _, ()>(
-                _del_dot_vec_2d,
-                [BLOCKS, 1, 1],
-                [THREADS_PER_BLOCK, 1, 1],
-                0,
-                (
+            offload! {
+                kernel = del_dot_vec_2d,
+                grid_dim = [BLOCKS, 1, 1],
+                block_dim = [THREADS_PER_BLOCK, 1, 1],
+                args = (
                     self.div as *mut [Real; NNALLS],
                     &*x1,
                     x2,
@@ -176,7 +184,7 @@ impl KernelBase for DelDotVec2D {
                     ptiny,
                     N_REAL_ZONES,
                 ),
-            );
+            };
         }
     }
 
@@ -202,40 +210,11 @@ impl KernelBase for DelDotVec2D {
     }
 }
 
-#[cfg(target_os = "linux")]
-unsafe extern "C" {
-    pub fn _del_dot_vec_2d(
-        div: *mut [Real; NNALLS],
-        x1: &[Real; NNALLS],
-        x2: *const Real,
-        x3: *const Real,
-        x4: *const Real,
-        y1: &[Real; NNALLS],
-        y2: *const Real,
-        y3: *const Real,
-        y4: *const Real,
-        fx1: &[Real; NNALLS],
-        fx2: *const Real,
-        fx3: *const Real,
-        fx4: *const Real,
-        fy1: &[Real; NNALLS],
-        fy2: *const Real,
-        fy3: *const Real,
-        fy4: *const Real,
-        real_zones: &[usize; N_REAL_ZONES],
-        half: Real,
-        ptiny: Real,
-        iend: usize,
-    );
-}
-
 #[cfg(not(target_os = "linux"))]
 use crate::common::types::{Real, RealExt};
 
-#[cfg(not(target_os = "linux"))]
-#[unsafe(no_mangle)]
-#[rustc_offload_kernel]
-pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
+#[offload_kernel]
+fn del_dot_vec_2d(
     div: *mut [Real; NNALLS],
     x1: &[Real; NNALLS],
     x2: *const Real,
@@ -262,27 +241,29 @@ pub unsafe extern "gpu-kernel" fn _del_dot_vec_2d(
     if ii < iend {
         let i = real_zones[ii];
 
-        let xi = half * (x1[i] + *x2.add(i) - *x3.add(i) - *x4.add(i));
-        let xj = half * (*x2.add(i) + *x3.add(i) - *x4.add(i) - x1[i]);
+        unsafe {
+            let xi = half * (x1[i] + *x2.add(i) - *x3.add(i) - *x4.add(i));
+            let xj = half * (*x2.add(i) + *x3.add(i) - *x4.add(i) - x1[i]);
 
-        let yi = half * (y1[i] + *y2.add(i) - *y3.add(i) - *y4.add(i));
-        let yj = half * (*y2.add(i) + *y3.add(i) - *y4.add(i) - y1[i]);
+            let yi = half * (y1[i] + *y2.add(i) - *y3.add(i) - *y4.add(i));
+            let yj = half * (*y2.add(i) + *y3.add(i) - *y4.add(i) - y1[i]);
 
-        let fxi = half * (fx1[i] + *fx2.add(i) - *fx3.add(i) - *fx4.add(i));
-        let fxj = half * (*fx2.add(i) + *fx3.add(i) - *fx4.add(i) - fx1[i]);
+            let fxi = half * (fx1[i] + *fx2.add(i) - *fx3.add(i) - *fx4.add(i));
+            let fxj = half * (*fx2.add(i) + *fx3.add(i) - *fx4.add(i) - fx1[i]);
 
-        let fyi = half * (fy1[i] + *fy2.add(i) - *fy3.add(i) - *fy4.add(i));
-        let fyj = half * (*fy2.add(i) + *fy3.add(i) - *fy4.add(i) - fy1[i]);
+            let fyi = half * (fy1[i] + *fy2.add(i) - *fy3.add(i) - *fy4.add(i));
+            let fyj = half * (*fy2.add(i) + *fy3.add(i) - *fy4.add(i) - fy1[i]);
 
-        let rarea = Real::from(1.0) / (xi * yj - xj * yi + ptiny);
+            let rarea = Real::from(1.0) / (xi * yj - xj * yi + ptiny);
 
-        let dfxdx = rarea * (fxi * yj - fxj * yi);
+            let dfxdx = rarea * (fxi * yj - fxj * yi);
 
-        let dfydy = rarea * (fyj * xi - fyi * xj);
+            let dfydy = rarea * (fyj * xi - fyi * xj);
 
-        let affine = (fy1[i] + *fy2.add(i) + *fy3.add(i) + *fy4.add(i))
-            / (y1[i] + *y2.add(i) + *y3.add(i) + *y4.add(i));
+            let affine = (fy1[i] + *fy2.add(i) + *fy3.add(i) + *fy4.add(i))
+                / (y1[i] + *y2.add(i) + *y3.add(i) + *y4.add(i));
 
-        (*div)[i] = dfxdx + dfydy + affine;
+            (*div)[i] = dfxdx + dfydy + affine;
+        }
     }
 }
