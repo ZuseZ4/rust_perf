@@ -217,3 +217,59 @@ unsafe impl<const W: usize, const H: usize, const SX: usize, const SY: usize, co
         })
     }
 }
+
+// some custom patterns needed for `rust_perf`
+
+// for vol3d
+#[derive(Debug, Copy, Clone)]
+pub struct OffsetStrideViewMut<'a, T> {
+    base_ptr: *mut T,
+    idx: usize,
+    len: usize,
+    _marker: core::marker::PhantomData<&'a mut T>,
+}
+
+impl<'a, T> OffsetStrideViewMut<'a, T> {
+    pub fn set(&mut self, offset: usize, val: T) {
+        if let Some(final_idx) = self.idx.checked_add(offset) {
+            if final_idx < self.len {
+                unsafe {
+                    *self.base_ptr.add(final_idx) = val;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct OffsetStride1D<const STRIDE: usize>;
+
+unsafe impl<const STRIDE: usize> PartitioningStrategy for OffsetStride1D<STRIDE> {
+    type View<'a, T: 'a> = &'a T;
+    type ViewMut<'a, T: 'a> = OffsetStrideViewMut<'a, T>;
+
+    fn index() -> usize {
+        let bidx = block_idx().x;
+        let tidx = thread_idx().x;
+        bidx * STRIDE + tidx
+    }
+
+    unsafe fn get<'a, T>(_: *const T, _: usize) -> Option<Self::View<'a, T>> {
+        unimplemented!("write only")
+    }
+
+    unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>> {
+        let idx = Self::index();
+        
+        if idx < len {
+            Some(OffsetStrideViewMut {
+                base_ptr: ptr,
+                idx,
+                len,
+                _marker: core::marker::PhantomData,
+            })
+        } else {
+            None
+        }
+    }
+}
