@@ -143,108 +143,108 @@ impl KernelBase for Energy {
 
         let mut e_new_reg = Region::<'_, _, Linear1D>::from(&p1);
         let mut q_new_reg = Region::<'_, _, Linear1D>::from(&p2);
-    unsafe {
-        offload! {
-            kernel = energycalc1,
-            grid_dim = [BLOCKS, 1, 1],
-            block_dim = [THREADS_PER_BLOCK, 1, 1],
-            args = (
+        unsafe {
+            offload! {
+                kernel = energycalc1,
+                grid_dim = [BLOCKS, 1, 1],
+                block_dim = [THREADS_PER_BLOCK, 1, 1],
+                args = (
+                    e_new_reg,
+                    &*(self.e_old as *const [Real; IEND]),
+                    &*(self.delvc as *const [Real; IEND]),
+                    &*(self.p_old as *const [Real; IEND]),
+                    &*(self.q_old as *const [Real; IEND]),
+                    &*(self.work as *const [Real; IEND]),
+                    IEND,
+                ),
+            };
+            offload! {
+                kernel = energycalc2,
+                grid_dim = [BLOCKS, 1, 1],
+                block_dim = [THREADS_PER_BLOCK, 1, 1],
+                args = (
+                    &*(self.delvc as *const [Real; IEND]),
+                    q_new_reg,
+                    &*(self.comp_half_step as *const [Real; IEND]),
+                    &*(self.p_half_step as *const [Real; IEND]),
+                    e_new_reg,
+                    &*(self.bvc as *const [Real; IEND]),
+                    &*(self.pbvc as *const [Real; IEND]),
+                    &*(self.ql_old as *const [Real; IEND]),
+                    &*(self.qq_old as *const [Real; IEND]),
+                    self.rho0,
+                    IEND,
+                ),
+            };
+            offload! {
+                kernel = energycalc3,
+                grid_dim = [BLOCKS, 1, 1],
+                block_dim = [THREADS_PER_BLOCK, 1, 1],
+                args = (
                 e_new_reg,
-                &*(self.e_old as *const [Real; IEND]),
-                &*(self.delvc as *const [Real; IEND]),
-                &*(self.p_old as *const [Real; IEND]),
-                &*(self.q_old as *const [Real; IEND]),
-                &*(self.work as *const [Real; IEND]),
-                IEND,
-            ),
-        };
-        offload! {
-            kernel = energycalc2,
-            grid_dim = [BLOCKS, 1, 1],
-            block_dim = [THREADS_PER_BLOCK, 1, 1],
-            args = (
-                &*(self.delvc as *const [Real; IEND]),
-                q_new_reg,
-                &*(self.comp_half_step as *const [Real; IEND]),
-                &*(self.p_half_step as *const [Real; IEND]),
-                e_new_reg,
-                &*(self.bvc as *const [Real; IEND]),
-                &*(self.pbvc as *const [Real; IEND]),
-                &*(self.ql_old as *const [Real; IEND]),
-                &*(self.qq_old as *const [Real; IEND]),
-                self.rho0,
-                IEND,
-            ),
-        };
-        offload! {
-            kernel = energycalc3,
-            grid_dim = [BLOCKS, 1, 1],
-            block_dim = [THREADS_PER_BLOCK, 1, 1],
-            args = (
-            e_new_reg,
-                &*(self.delvc as *const [Real; IEND]),
-                &*(self.p_old as *const [Real; IEND]),
-                &*(self.q_old as *const [Real; IEND]),
-                &*(self.p_half_step as *const [Real; IEND]),
-                &*(self.q_new as *const [Real; IEND]),
-                IEND,
-            ),
-        };
-        offload! {
-            kernel = energycalc4,
-            grid_dim = [BLOCKS, 1, 1],
-            block_dim = [THREADS_PER_BLOCK, 1, 1],
-            args = (
-                e_new_reg,
-                &*(self.work as *const [Real; IEND]),
-                self.e_cut,
-                self.emin,
-                IEND,
-            ),
-        };
-        offload! {
-            kernel = energycalc5,
-            grid_dim = [BLOCKS, 1, 1],
-            block_dim = [THREADS_PER_BLOCK, 1, 1],
-            args = (
-                &*(self.delvc as *const [Real; IEND]),
-                &*(self.pbvc as *const [Real; IEND]),
-                e_new_reg,
-                &*(self.vnewc as *const [Real; IEND]),
-                &*(self.bvc as *const [Real; IEND]),
-                &*(self.p_new as *const [Real; IEND]),
-                &*(self.ql_old as *const [Real; IEND]),
-                &*(self.qq_old as *const [Real; IEND]),
-                &*(self.p_old as *const [Real; IEND]),
-                &*(self.q_old as *const [Real; IEND]),
-                &*(self.p_half_step as *const [Real; IEND]),
-                &*(self.q_new as *const [Real; IEND]),
-                self.rho0,
-                self.e_cut,
-                self.emin,
-                IEND,
-            ),
-        };
-        offload! {
-            kernel = energycalc6,
-            grid_dim = [BLOCKS, 1, 1],
-            block_dim = [THREADS_PER_BLOCK, 1, 1],
-            args = (
-                &*(self.delvc as *const [Real; IEND]),
-                &*(self.pbvc as *const [Real; IEND]),
-                e_new_reg,
-                &*(self.vnewc as *const [Real; IEND]),
-                &*(self.bvc as *const [Real; IEND]),
-                &*(self.p_new as *const [Real; IEND]),
-                q_new_reg,
-                &*(self.ql_old as *const [Real; IEND]),
-                &*(self.qq_old as *const [Real; IEND]),
-                self.rho0,
-                self.q_cut,
-                IEND,
-            ),
-        };
-    }
+                    &*(self.delvc as *const [Real; IEND]),
+                    &*(self.p_old as *const [Real; IEND]),
+                    &*(self.q_old as *const [Real; IEND]),
+                    &*(self.p_half_step as *const [Real; IEND]),
+                    &*(self.q_new as *const [Real; IEND]),
+                    IEND,
+                ),
+            };
+            offload! {
+                kernel = energycalc4,
+                grid_dim = [BLOCKS, 1, 1],
+                block_dim = [THREADS_PER_BLOCK, 1, 1],
+                args = (
+                    e_new_reg,
+                    &*(self.work as *const [Real; IEND]),
+                    self.e_cut,
+                    self.emin,
+                    IEND,
+                ),
+            };
+            offload! {
+                kernel = energycalc5,
+                grid_dim = [BLOCKS, 1, 1],
+                block_dim = [THREADS_PER_BLOCK, 1, 1],
+                args = (
+                    &*(self.delvc as *const [Real; IEND]),
+                    &*(self.pbvc as *const [Real; IEND]),
+                    e_new_reg,
+                    &*(self.vnewc as *const [Real; IEND]),
+                    &*(self.bvc as *const [Real; IEND]),
+                    &*(self.p_new as *const [Real; IEND]),
+                    &*(self.ql_old as *const [Real; IEND]),
+                    &*(self.qq_old as *const [Real; IEND]),
+                    &*(self.p_old as *const [Real; IEND]),
+                    &*(self.q_old as *const [Real; IEND]),
+                    &*(self.p_half_step as *const [Real; IEND]),
+                    &*(self.q_new as *const [Real; IEND]),
+                    self.rho0,
+                    self.e_cut,
+                    self.emin,
+                    IEND,
+                ),
+            };
+            offload! {
+                kernel = energycalc6,
+                grid_dim = [BLOCKS, 1, 1],
+                block_dim = [THREADS_PER_BLOCK, 1, 1],
+                args = (
+                    &*(self.delvc as *const [Real; IEND]),
+                    &*(self.pbvc as *const [Real; IEND]),
+                    e_new_reg,
+                    &*(self.vnewc as *const [Real; IEND]),
+                    &*(self.bvc as *const [Real; IEND]),
+                    &*(self.p_new as *const [Real; IEND]),
+                    q_new_reg,
+                    &*(self.ql_old as *const [Real; IEND]),
+                    &*(self.qq_old as *const [Real; IEND]),
+                    self.rho0,
+                    self.q_cut,
+                    IEND,
+                ),
+            };
+        }
     }
 
     fn update_checksum(&self) -> f64 {

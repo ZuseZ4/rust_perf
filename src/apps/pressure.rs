@@ -1,6 +1,15 @@
 pub const N_DEFAULT: usize = 1000000;
 const DEFAULT_REPS: u32 = 700;
 
+use core::offload::offload_kernel;
+use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
+
+#[cfg(target_os = "linux")]
+use rustc_offload_frontend::offload;
+
+#[cfg(target_os = "linux")]
+use core::offload::offload::{PreloadMut, preload_mut};
+
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{_block_idx_x as block_idx_x, _thread_idx_x as thread_idx_x};
 
@@ -91,26 +100,33 @@ impl KernelBase for Pressure {
         let grid = [n.div_ceil(256) as u32, 1, 1];
         let block = [256, 1, 1];
 
-        core::intrinsics::offload::<_, _, ()>(
-            _pressure_calc1,
-            grid,
-            block,
-            0,
-            (
-                self.bvc as *mut [Real; N_DEFAULT],
+        let mut bvc = unsafe { &mut *(self.bvc as *mut [Real; N_DEFAULT]) };
+        let mut p_new = unsafe { &mut *(self.p_new as *mut [Real; N_DEFAULT]) };
+
+        let p1: PreloadMut<[Real; N_DEFAULT]> = preload_mut(&mut bvc);
+        let p2: PreloadMut<[Real; N_DEFAULT]> = preload_mut(&mut p_new);
+
+        let mut bvc_reg = Region::<'_, _, Stride1D<256>>::from(&p1);
+        let mut p_new_reg = Region::<'_, _, Stride1D<256>>::from(&p2);
+
+        offload! {
+            kernel = pressure_calc1,
+            grid_dim = grid,
+            block_dim = block,
+            args = (
+                bvc_reg,
                 self.compression as *const [Real; N_DEFAULT],
                 self.cls,
                 n,
             ),
-        );
+        };
 
-        core::intrinsics::offload::<_, _, ()>(
-            _pressure_calc2,
-            grid,
-            block,
-            0,
-            (
-                self.p_new as *mut [Real; N_DEFAULT],
+        offload! {
+            kernel = pressure_calc2,
+            grid_dim = grid,
+            block_dim = block,
+            args = (
+                p_new_reg,
                 self.bvc as *const [Real; N_DEFAULT],
                 self.e_old as *const [Real; N_DEFAULT],
                 self.vnewc as *const [Real; N_DEFAULT],
@@ -119,7 +135,7 @@ impl KernelBase for Pressure {
                 self.pmin,
                 n,
             ),
-        );
+        };
     }
 
     fn update_checksum(&self) -> f64 {
@@ -143,52 +159,25 @@ impl KernelBase for Pressure {
     }
 }
 
-#[cfg(target_os = "linux")]
-unsafe extern "C" {
-    pub fn _pressure_calc1(
-        bvc: *mut [Real; N_DEFAULT],
-        compression: *const [Real; N_DEFAULT],
-        cls: Real,
-        n: usize,
-    );
-
-    pub fn _pressure_calc2(
-        p_new: *mut [Real; N_DEFAULT],
-        bvc: *const [Real; N_DEFAULT],
-        e_old: *const [Real; N_DEFAULT],
-        vnewc: *const [Real; N_DEFAULT],
-        p_cut: Real,
-        eosvmax: Real,
-        pmin: Real,
-        n: usize,
-    );
-}
-
 #[cfg(not(target_os = "linux"))]
 use crate::common::types::Real;
 
-#[cfg(not(target_os = "linux"))]
-#[unsafe(no_mangle)]
-#[rustc_offload_kernel]
-pub unsafe extern "gpu-kernel" fn _pressure_calc1(
-    bvc: *mut [Real; N_DEFAULT],
+#[offload_kernel]
+fn pressure_calc1(
+    mut bvc: Region<Real, Stride1D<256>>,
     compression: *const [Real; N_DEFAULT],
     cls: Real,
     n: usize,
 ) {
-    let i = unsafe { (block_idx_x() * 256 + thread_idx_x()) as usize };
-    if i < n {
-        unsafe {
-            (*bvc)[i] = cls * ((*compression)[i] + Real::from(1.0));
-        }
+    let i = Stride1D::<256>::index();
+    if let Some(v) = bvc.get_mut() {
+        *v = cls * ((*compression)[i] + Real::from(1.0));
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-#[unsafe(no_mangle)]
-#[rustc_offload_kernel]
-pub unsafe extern "gpu-kernel" fn _pressure_calc2(
-    p_new: *mut [Real; N_DEFAULT],
+#[offload_kernel]
+fn pressure_calc2(
+    mut p_new: Region<Real, Stride1D<256>>,
     bvc: *const [Real; N_DEFAULT],
     e_old: *const [Real; N_DEFAULT],
     vnewc: *const [Real; N_DEFAULT],
@@ -197,8 +186,8 @@ pub unsafe extern "gpu-kernel" fn _pressure_calc2(
     pmin: Real,
     n: usize,
 ) {
-    let i = unsafe { (block_idx_x() * 256 + thread_idx_x()) as usize };
-    if i < n {
+    let i = Stride1D::<256>::index();
+    if let Some(v) = p_new.get_mut() {
         unsafe {
             let mut p = (*bvc)[i] * (*e_old)[i];
 
@@ -212,7 +201,7 @@ pub unsafe extern "gpu-kernel" fn _pressure_calc2(
                 p = pmin;
             }
 
-            (*p_new)[i] = p;
+            *v = p;
         }
     }
 }

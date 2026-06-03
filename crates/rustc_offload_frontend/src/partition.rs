@@ -1,4 +1,4 @@
-use crate::gpu::global_thread_dim;
+use crate::gpu::{ global_thread_dim, block_idx, block_dim, thread_idx };
 use core::convert::From;
 use core::prelude::v1::*;
 use core::offload::offload::PreloadMut;
@@ -137,7 +137,42 @@ unsafe impl<const W: usize> PartitioningStrategy for Linear2D<W> {
     }
 }
 
-// stride
+// stride1d
+#[derive(Debug, Copy, Clone)]
+pub struct Stride1D<
+    const STRIDE: usize,
+>;
+unsafe impl<const STRIDE: usize>
+    PartitioningStrategy for Stride1D<STRIDE>
+{
+    type View<'a, T: 'a> = &'a T;
+    type ViewMut<'a, T: 'a> = &'a mut T;
+
+    fn index() -> usize {
+        let bidx = block_idx().x;
+        let tidx = thread_idx().x;
+        bidx * STRIDE + tidx
+    }
+    unsafe fn get<'a, T>(ptr: *const T, len: usize) -> Option<Self::View<'a, T>> {
+        let idx = Self::index();
+        if idx < len {
+            Some(unsafe { &*ptr.add(idx) })
+        } else {
+            None
+        }
+    }
+    unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>> {
+        let idx = Self::index();
+        if idx < len {
+            Some(unsafe { &mut *ptr.add(idx) })
+        } else {
+            None
+        }
+    }
+}
+
+
+// stride2d
 #[derive(Debug, Copy, Clone)]
 pub struct StrideViewMut<'a, T> {
     block_ptr: *mut T,
