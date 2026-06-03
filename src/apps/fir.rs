@@ -6,16 +6,14 @@ pub const COEFFLEN: usize = 16;
 const THREADS_PER_BLOCK: u32 = 256;
 const BLOCKS: u32 = (IEND as u32).div_ceil(THREADS_PER_BLOCK);
 
-
 use core::offload::offload_kernel;
-use rustc_offload_frontend::partition::{Region, Linear1D, PartitioningStrategy};
+use rustc_offload_frontend::partition::{Linear1D, PartitioningStrategy, Region};
 
 #[cfg(target_os = "linux")]
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
 use core::offload::offload::{PreloadMut, preload_mut};
-
 
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{

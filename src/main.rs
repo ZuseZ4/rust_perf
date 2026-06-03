@@ -50,9 +50,9 @@ static mut K_VOL3D: Vol3D = Vol3D::INIT;
 
 #[cfg(target_os = "linux")]
 fn main() {
+    use core::mem::MaybeUninit;
     use rust_perf::common::executor::{Executor, KernelResult, MAX_KERNELS};
     use rust_perf::common::kernel_base::KernelBase;
-    use core::mem::MaybeUninit;
 
     let mut k_links: [Option<&mut dyn KernelBase>; MAX_KERNELS] = [const { None }; MAX_KERNELS];
     let mut count = 0;

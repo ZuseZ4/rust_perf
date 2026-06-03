@@ -12,6 +12,7 @@ pub unsafe trait PartitioningStrategy {
     unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>>;
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct Region<'a, T, S: PartitioningStrategy> {
     ptr: *mut T,
     len: usize,
@@ -80,6 +81,7 @@ impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
 }
 
 // linear1d
+#[derive(Debug, Copy, Clone)]
 pub struct Linear1D;
 unsafe impl PartitioningStrategy for Linear1D {
     type View<'a, T: 'a> = &'a T;
@@ -107,6 +109,7 @@ unsafe impl PartitioningStrategy for Linear1D {
 }
 
 // linear2d
+#[derive(Debug, Copy, Clone)]
 pub struct Linear2D<const W: usize>;
 unsafe impl<const W: usize> PartitioningStrategy for Linear2D<W> {
     type View<'a, T: 'a> = &'a T;
@@ -135,6 +138,7 @@ unsafe impl<const W: usize> PartitioningStrategy for Linear2D<W> {
 }
 
 // stride
+#[derive(Debug, Copy, Clone)]
 pub struct StrideViewMut<'a, T> {
     block_ptr: *mut T,
     stride: usize,
@@ -148,6 +152,7 @@ impl<'a, T> StrideViewMut<'a, T> {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct Stride2D<
     const W: usize,
     const H: usize,
