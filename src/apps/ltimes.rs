@@ -18,24 +18,6 @@ use core::arch::nvptx::{
     _thread_idx_x as thread_idx_x, _thread_idx_y as thread_idx_y, _thread_idx_z as thread_idx_z,
 };
 
-#[cfg(target_arch = "amdgpu")]
-#[allow(improper_ctypes)]
-unsafe extern "C" {
-    #[link_name = "llvm.amdgcn.workgroup.id.x"]
-    fn block_idx_x() -> i32;
-    #[link_name = "llvm.amdgcn.workgroup.id.y"]
-    fn block_idx_y() -> i32;
-    #[link_name = "llvm.amdgcn.workgroup.id.z"]
-    fn block_idx_z() -> i32;
-
-    #[link_name = "llvm.amdgcn.workitem.id.x"]
-    fn thread_idx_x() -> i32;
-    #[link_name = "llvm.amdgcn.workitem.id.y"]
-    fn thread_idx_y() -> i32;
-    #[link_name = "llvm.amdgcn.workitem.id.z"]
-    fn thread_idx_z() -> i32;
-}
-
 #[cfg(target_os = "linux")]
 use libc::printf;
 

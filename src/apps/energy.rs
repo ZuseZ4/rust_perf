@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 
 const DEFAULT_PROBLEM_SIZE: usize = 1_000_000;
 const DEFAULT_REPS: u32 = 130;
@@ -16,21 +17,6 @@ use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
 use core::offload::offload::{PreloadMut, preload_mut};
-
-#[cfg(target_arch = "nvptx64")]
-use core::arch::nvptx::{
-    _block_dim_x as block_dim_x, _block_idx_x as block_idx_x, _thread_idx_x as thread_idx_x,
-};
-
-#[cfg(target_arch = "amdgpu")]
-use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
-
-#[cfg(target_arch = "amdgpu")]
-#[allow(improper_ctypes)]
-unsafe extern "C" {
-    #[link_name = "llvm.amdgcn.workgroup.size.x"]
-    fn block_dim_x() -> u32;
-}
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{

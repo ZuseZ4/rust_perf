@@ -32,12 +32,6 @@ use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_
 use core::arch::nvptx::{
     _block_dim_x as block_dim_x, _block_idx_x as block_idx_x, _thread_idx_x as thread_idx_x,
 };
-#[cfg(target_arch = "amdgpu")]
-#[allow(improper_ctypes)]
-unsafe extern "C" {
-    #[link_name = "llvm.amdgcn.workgroup.size.x"]
-    fn block_dim_x() -> u32;
-}
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{
