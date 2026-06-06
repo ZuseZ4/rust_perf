@@ -4,51 +4,20 @@ version = "0.1.0"
 edition = "2024"
 
 [lib]
-crate-type = ["rlib", "cdylib"]
-path = "src/lib.rs"
-
-[[bin]]
-name = "main"
-path = "src/main.rs"
+crate-type = ["cdylib"]
+#path = "src/lib.rs"
 
 [dependencies]
 libc = { version = "0.2.175", default-features = false }
 rustc_offload_frontend = { path = "crates/rustc_offload_frontend" }
 
 [features]
-default = ["all", "f64"]
-all = [
-    "energy",
-    "fir",
-    "del_dot_vec_2d",
-    "mass3dea",
-    "convection3pda",
-    "diffusion3dpa",
-    "ltimes",
-    "mass3dpa",
-    "massvec3dpa",
-    "matvec_3d_stencil",
-    "pressure",
-    "vol3d",
-]
-energy = []
-fir = []
-del_dot_vec_2d = []
-mass3dea = []
-convection3pda = []
-diffusion3dpa = []
-ltimes = []
-mass3dpa = []
-massvec3dpa = []
-matvec_3d_stencil = []
-pressure = []
-vol3d = []
-f64 = []
-a64 = []
+default = []
 
 [profile.release]
 lto = "fat"
 panic = "abort"
+codegen-units = 1
 
 [profile.dev]
 lto = "fat"

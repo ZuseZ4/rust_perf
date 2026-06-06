@@ -231,7 +231,8 @@ fn del_dot_vec_2d(
     ptiny: Real,
     iend: usize,
 ) {
-    let ii = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
+    let ii = unsafe { (block_idx_x() * 512 + thread_idx_x()) as usize };
+    //let ii = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
     if ii < iend {
         let i = real_zones[ii];
 
