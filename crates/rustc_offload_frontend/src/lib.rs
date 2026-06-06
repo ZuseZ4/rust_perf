@@ -5,7 +5,8 @@
 #![allow(improper_ctypes_definitions)]
 #![feature(gpu_offload, offload)]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
-#![cfg_attr(target_arch = "nvptx64", no_std)]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
+#![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_std)]
 
 pub use core::offload::offload_kernel;
 

@@ -5,9 +5,12 @@
 #![allow(improper_ctypes_definitions)]
 #![feature(gpu_offload)]
 #![cfg_attr(target_os = "linux", feature(core_intrinsics, offload))]
-#![cfg_attr(target_arch = "nvptx64", feature(abi_gpu_kernel))]
-#![cfg_attr(target_arch = "nvptx64", no_std)]
-#![cfg_attr(target_arch = "nvptx64", no_main)]
+#![cfg_attr(
+    any(target_arch = "nvptx64", target_arch = "amdgpu"),
+    feature(abi_gpu_kernel)
+)]
+#![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_std)]
+#![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_main)]
 
 #[cfg(target_os = "linux")]
 extern crate libc;
