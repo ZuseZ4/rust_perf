@@ -6,7 +6,8 @@
 #![feature(gpu_offload, offload)]
 #![feature(float_algebraic, core_float_math)]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx, abi_gpu_kernel))]
-#![cfg_attr(target_arch = "nvptx64", no_std)]
+#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu, abi_gpu_kernel))]
+#![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_std)]
 #![feature(rustc_attrs, core_intrinsics)]
 
 pub mod apps;
