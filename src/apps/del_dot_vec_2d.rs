@@ -24,7 +24,7 @@ use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{PreloadMut, preload_mut};
+use core::offload::offload::{preload_mut, PreloadMut};
 
 #[cfg(target_arch = "amdgpu")]
 use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
@@ -43,7 +43,7 @@ use crate::common::kernel_base::KernelBase;
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
-use crate::common::types::{Real, to_real};
+use crate::common::types::{to_real, Real};
 
 #[cfg(target_os = "linux")]
 pub struct DelDotVec2D {
@@ -231,7 +231,7 @@ fn del_dot_vec_2d(
     ptiny: Real,
     iend: usize,
 ) {
-    let ii = unsafe { (block_idx_x() * 512 + thread_idx_x()) as usize };
+    let ii = unsafe { (block_idx_x() * 256 + thread_idx_x()) as usize };
     //let ii = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
     if ii < iend {
         let i = real_zones[ii];

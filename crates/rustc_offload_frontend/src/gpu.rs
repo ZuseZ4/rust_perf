@@ -5,6 +5,9 @@ pub struct Dim3 {
     pub z: usize,
 }
 
+#[cfg(target_arch = "amdgpu")]
+use core::intrinsics::gpu::amdgpu_dispatch_ptr;
+
 /// Get the packet for this dispatch.
 ///
 /// Get a reference to the packet that was used to dispatch this kernel.
@@ -34,7 +37,7 @@ pub fn dispatch_ptr() -> &'static HsaKernelDispatchPacket {
 /// HSA packet to dispatch a kernel.
 ///
 /// A pointer to the packet that was used to dispatch the currently running kernel can be obtained with [`dispatch_ptr`].
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[repr(C)]
 pub struct HsaKernelDispatchPacket {
     /// Packet header. Used to configure multiple packet parameters such as the
@@ -85,7 +88,7 @@ pub struct HsaKernelDispatchPacket {
 }
 // Handle to an HSA signal.
 //#[cfg(feature = "device_libs")]
-//#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+//#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 //#[repr(C)]
 //pub struct HsaSignal {
 //    /// The internal representation of an HSA signal.
@@ -105,11 +108,11 @@ pub(crate) fn global_thread_dim() -> Dim3 {
     #[cfg(target_arch = "amdgpu")]
     unsafe {
         use core::arch::amdgpu::*;
-        let dispatch = amdgpu_dispatch_ptr();
+        let dispatch = dispatch_ptr();
 
-        let x = workgroup_id_x() * dispatch.workgroup_size_x as u32 + workitem_id_x();
-        let y = workgroup_id_y() * dispatch.workgroup_size_y as u32 + workitem_id_y();
-        let z = workgroup_id_z() * dispatch.workgroup_size_z as u32 + workitem_id_z();
+        let x = (workgroup_id_x() * (*dispatch).workgroup_size_x as u32 + workitem_id_x()) as usize;
+        let y = (workgroup_id_y() * (*dispatch).workgroup_size_y as u32 + workitem_id_y()) as usize;
+        let z = (workgroup_id_z() * (*dispatch).workgroup_size_z as u32 + workitem_id_z()) as usize;
         Dim3 { x, y, z }
     }
     #[cfg(target_os = "linux")]
@@ -129,11 +132,11 @@ pub(crate) fn block_idx() -> Dim3 {
     #[cfg(target_arch = "amdgpu")]
     unsafe {
         use core::arch::amdgpu::*;
-        let dispatch = amdgpu_dispatch_ptr();
+        let dispatch = dispatch_ptr();
 
-        let x = workgroup_id_x();
-        let y = workgroup_id_y();
-        let z = workgroup_id_z();
+        let x = (workgroup_id_x()) as usize;
+        let y = (workgroup_id_y()) as usize;
+        let z = (workgroup_id_z()) as usize;
         Dim3 { x, y, z }
     }
     #[cfg(target_os = "linux")]
@@ -153,7 +156,7 @@ pub(crate) fn block_dim() -> Dim3 {
     #[cfg(target_arch = "amdgpu")]
     unsafe {
         use core::arch::amdgpu::*;
-        let dispatch = amdgpu_dispatch_ptr();
+        let dispatch = dispatch_ptr();
 
         let x = dispatch.workgroup_size_x as usize;
         let y = dispatch.workgroup_size_y as usize;
@@ -178,9 +181,9 @@ pub(crate) fn thread_idx() -> Dim3 {
     unsafe {
         use core::arch::amdgpu::*;
 
-        let x = workitem_id_x();
-        let y = workitem_id_y();
-        let z = workitem_id_z();
+        let x = (workitem_id_x()) as usize;
+        let y = (workitem_id_y()) as usize;
+        let z = (workitem_id_z()) as usize;
         Dim3 { x, y, z }
     }
     #[cfg(target_os = "linux")]

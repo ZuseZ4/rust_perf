@@ -4,11 +4,16 @@ const DEFAULT_REPS: u32 = 100;
 use core::offload::offload_kernel;
 use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
 
+#[cfg(target_arch = "amdgpu")]
+use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
+#[cfg(target_arch = "nvptx64")]
+use core::arch::nvptx::{_block_idx_x as block_idx_x, _thread_idx_x as thread_idx_x};
+
 #[cfg(target_os = "linux")]
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{PreloadMut, preload_mut};
+use core::offload::offload::{preload_mut, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{
@@ -21,7 +26,7 @@ use crate::common::kernel_base::KernelBase;
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
-use crate::common::types::{Real, to_real};
+use crate::common::types::{to_real, Real};
 
 #[cfg(target_os = "linux")]
 pub struct Matvec3DStencil {

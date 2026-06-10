@@ -3,7 +3,7 @@
 #![allow(improper_ctypes)]
 #![allow(improper_gpu_kernel_arg)]
 #![allow(improper_ctypes_definitions)]
-#![feature(gpu_offload, offload)]
+#![feature(gpu_offload, core_intrinsics, gpu_intrinsics, offload)]
 #![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
 #![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
 #![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_std)]

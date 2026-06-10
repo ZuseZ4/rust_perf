@@ -10,8 +10,13 @@ use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride3D};
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{PreloadMut, preload_mut};
+use core::offload::offload::{preload_mut, PreloadMut};
 
+#[cfg(target_arch = "amdgpu")]
+use core::arch::amdgpu::{
+    workgroup_id_x as block_idx_x, workgroup_id_y as block_idx_y, workgroup_id_z as block_idx_z,
+    workitem_id_x as thread_idx_x, workitem_id_y as thread_idx_y, workitem_id_z as thread_idx_z,
+};
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{
     _block_idx_x as block_idx_x, _block_idx_y as block_idx_y, _block_idx_z as block_idx_z,
@@ -31,7 +36,7 @@ use crate::common::kernel_base::KernelBase;
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
-use crate::common::types::{Real, to_real};
+use crate::common::types::{to_real, Real};
 
 #[cfg(target_os = "linux")]
 pub struct LTimes {

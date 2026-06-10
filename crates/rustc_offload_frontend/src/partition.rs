@@ -12,7 +12,7 @@ pub unsafe trait PartitioningStrategy {
     unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>>;
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct Region<'a, T, S: PartitioningStrategy> {
     ptr: *mut T,
     len: usize,
@@ -81,7 +81,7 @@ impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
 }
 
 // linear1d
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct Linear1D;
 unsafe impl PartitioningStrategy for Linear1D {
     type View<'a, T: 'a> = &'a T;
@@ -109,7 +109,7 @@ unsafe impl PartitioningStrategy for Linear1D {
 }
 
 // linear2d
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct Linear2D<const W: usize>;
 unsafe impl<const W: usize> PartitioningStrategy for Linear2D<W> {
     type View<'a, T: 'a> = &'a T;
@@ -138,7 +138,7 @@ unsafe impl<const W: usize> PartitioningStrategy for Linear2D<W> {
 }
 
 // stride1d
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct Stride1D<const STRIDE: usize>;
 unsafe impl<const STRIDE: usize> PartitioningStrategy for Stride1D<STRIDE> {
     type View<'a, T: 'a> = &'a T;
@@ -168,7 +168,7 @@ unsafe impl<const STRIDE: usize> PartitioningStrategy for Stride1D<STRIDE> {
 }
 
 // stride2d
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct StrideViewMut<'a, T> {
     block_ptr: *mut T,
     stride: usize,
@@ -182,7 +182,7 @@ impl<'a, T> StrideViewMut<'a, T> {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct Stride2D<
     const W: usize,
     const H: usize,
@@ -216,7 +216,7 @@ unsafe impl<const W: usize, const H: usize, const SX: usize, const SY: usize, co
 // some custom patterns needed for `rust_perf`
 
 // for vol3d
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct OffsetStrideViewMut<'a, T> {
     base_ptr: *mut T,
     idx: usize,
@@ -236,7 +236,7 @@ impl<'a, T> OffsetStrideViewMut<'a, T> {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct OffsetStride1D<const STRIDE: usize>;
 
 unsafe impl<const STRIDE: usize> PartitioningStrategy for OffsetStride1D<STRIDE> {
@@ -270,7 +270,7 @@ unsafe impl<const STRIDE: usize> PartitioningStrategy for OffsetStride1D<STRIDE>
 }
 
 // for ltimes
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct Stride3D<
     const BX: usize,
     const BY: usize,
@@ -279,13 +279,8 @@ pub struct Stride3D<
     const MAX_Y: usize,
 >;
 
-unsafe impl<
-    const BX: usize,
-    const BY: usize,
-    const BZ: usize,
-    const MAX_X: usize,
-    const MAX_Y: usize,
-> PartitioningStrategy for Stride3D<BX, BY, BZ, MAX_X, MAX_Y>
+unsafe impl<const BX: usize, const BY: usize, const BZ: usize, const MAX_X: usize, const MAX_Y: usize>
+    PartitioningStrategy for Stride3D<BX, BY, BZ, MAX_X, MAX_Y>
 {
     type View<'a, T: 'a> = &'a T;
     type ViewMut<'a, T: 'a> = &'a mut T;
