@@ -27,6 +27,15 @@ use rustc_offload_frontend::offload;
 use core::offload::offload::{preload_mut, PreloadMut};
 
 #[cfg(target_arch = "amdgpu")]
+#[inline(always)]
+fn block_dim_x() -> u32 {
+    use rustc_offload_frontend::gpu::*;
+    let dispatch = dispatch_ptr();
+    let x = (*dispatch).workgroup_size_x as u32;
+    x
+}
+
+#[cfg(target_arch = "amdgpu")]
 use core::arch::amdgpu::{workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x};
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{
@@ -232,8 +241,7 @@ fn del_dot_vec_2d(
     ptiny: Real,
     iend: usize,
 ) {
-    let ii = unsafe { (block_idx_x() * 256 + thread_idx_x()) as usize };
-    //let ii = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
+    let ii = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
     if ii < iend {
         let i = real_zones[ii];
 

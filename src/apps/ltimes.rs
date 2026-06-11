@@ -122,7 +122,7 @@ impl KernelBase for LTimes {
         unsafe { calc_checksum(self.phidat as *const Real, philen) }
     }
 
-    fn tear_down(&mut self) {
+    fn tear_down(&mut self) -> f64 {
         unsafe {
             free(self.phidat);
             free(self.elldat);
@@ -132,6 +132,7 @@ impl KernelBase for LTimes {
             self.psidat = core::ptr::null_mut();
         }
         self.num_z = 0;
+        self.update_checksum()
     }
 }
 
