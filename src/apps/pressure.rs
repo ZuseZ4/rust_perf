@@ -1,4 +1,4 @@
-pub const N_DEFAULT: usize = 1000000;
+pub const N_DEFAULT: usize = 1_000_000;
 const DEFAULT_REPS: u32 = 700;
 
 use core::offload::offload_kernel;
@@ -8,22 +8,24 @@ use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{PreloadMut, preload_mut};
+use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{
     alloc_and_init_data, alloc_and_init_data_const, calc_checksum, free, init_data_scalar,
 };
+
 #[cfg(target_os = "linux")]
 use crate::common::kernel_base::KernelBase;
+
 #[cfg(target_os = "linux")]
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
-use crate::common::types::{Real, to_real};
+use crate::common::types::{to_real, Real};
 
 #[cfg(target_os = "linux")]
-pub struct Pressure {
+pub struct Pressure<'a> {
     n: usize,
     compression: *mut Real,
     bvc: *mut Real,
@@ -34,10 +36,16 @@ pub struct Pressure {
     p_cut: Real,
     pmin: Real,
     eosvmax: Real,
+
+    p_compression: Option<Preload<'a, [Real; N_DEFAULT]>>,
+    p_bvc: Option<PreloadMut<'a, [Real; N_DEFAULT]>>,
+    p_p_new: Option<PreloadMut<'a, [Real; N_DEFAULT]>>,
+    p_e_old: Option<Preload<'a, [Real; N_DEFAULT]>>,
+    p_vnewc: Option<Preload<'a, [Real; N_DEFAULT]>>,
 }
 
 #[cfg(target_os = "linux")]
-impl Pressure {
+impl<'a> Pressure<'a> {
     pub const INIT: Self = Pressure {
         n: 0,
         compression: core::ptr::null_mut(),
@@ -49,11 +57,17 @@ impl Pressure {
         p_cut: to_real(1.0e-7),
         pmin: to_real(1.0e-10),
         eosvmax: to_real(1.0e+10),
+
+        p_compression: None,
+        p_bvc: None,
+        p_p_new: None,
+        p_e_old: None,
+        p_vnewc: None,
     };
 }
 
 #[cfg(target_os = "linux")]
-impl KernelBase for Pressure {
+impl<'a> KernelBase for Pressure<'a> {
     fn name(&self) -> &'static str {
         kernel_name!("PRESSURE")
     }
@@ -67,7 +81,13 @@ impl KernelBase for Pressure {
     }
 
     fn setup(&mut self) {
-        self.n = N_DEFAULT;
+        self.n = self.default_problem_size();
+
+        assert_eq!(
+            self.n, N_DEFAULT,
+            "PRESSURE const-array preload version requires n = {N_DEFAULT}, got {}",
+            self.n
+        );
 
         unsafe {
             self.compression = alloc_and_init_data(self.n);
@@ -81,6 +101,27 @@ impl KernelBase for Pressure {
             self.pmin = init_data_scalar();
             self.eosvmax = init_data_scalar();
         }
+
+        let compression_ref: &'a [Real; N_DEFAULT] =
+            unsafe { &*(self.compression as *const [Real; N_DEFAULT]) };
+
+        let bvc_ref: &'a mut [Real; N_DEFAULT] =
+            unsafe { &mut *(self.bvc as *mut [Real; N_DEFAULT]) };
+
+        let p_new_ref: &'a mut [Real; N_DEFAULT] =
+            unsafe { &mut *(self.p_new as *mut [Real; N_DEFAULT]) };
+
+        let e_old_ref: &'a [Real; N_DEFAULT] =
+            unsafe { &*(self.e_old as *const [Real; N_DEFAULT]) };
+
+        let vnewc_ref: &'a [Real; N_DEFAULT] =
+            unsafe { &*(self.vnewc as *const [Real; N_DEFAULT]) };
+
+        self.p_compression = Some(preload(compression_ref));
+        self.p_bvc = Some(preload_mut(bvc_ref));
+        self.p_p_new = Some(preload_mut(p_new_ref));
+        self.p_e_old = Some(preload(e_old_ref));
+        self.p_vnewc = Some(preload(vnewc_ref));
     }
 
     fn run_kernel(&mut self) {
@@ -88,14 +129,27 @@ impl KernelBase for Pressure {
         let grid = [n.div_ceil(256) as u32, 1, 1];
         let block = [256, 1, 1];
 
-        let mut bvc = unsafe { &mut *(self.bvc as *mut [Real; N_DEFAULT]) };
-        let mut p_new = unsafe { &mut *(self.p_new as *mut [Real; N_DEFAULT]) };
+        self.p_compression
+            .as_ref()
+            .expect("PRESSURE compression was not preloaded");
 
-        let p1: PreloadMut<[Real; N_DEFAULT]> = preload_mut(&mut bvc);
-        let p2: PreloadMut<[Real; N_DEFAULT]> = preload_mut(&mut p_new);
+        let p_bvc = self.p_bvc.as_ref().expect("PRESSURE bvc was not preloaded");
 
-        let mut bvc_reg = Region::<'_, _, Stride1D<256>>::from(&p1);
-        let mut p_new_reg = Region::<'_, _, Stride1D<256>>::from(&p2);
+        let p_p_new = self
+            .p_p_new
+            .as_ref()
+            .expect("PRESSURE p_new was not preloaded");
+
+        self.p_e_old
+            .as_ref()
+            .expect("PRESSURE e_old was not preloaded");
+
+        self.p_vnewc
+            .as_ref()
+            .expect("PRESSURE vnewc was not preloaded");
+
+        let mut bvc_reg = Region::<'_, _, Stride1D<256>>::from(p_bvc);
+        let mut p_new_reg = Region::<'_, _, Stride1D<256>>::from(p_p_new);
 
         offload! {
             kernel = pressure_calc1,
@@ -130,20 +184,47 @@ impl KernelBase for Pressure {
         unsafe { calc_checksum(self.p_new as *const Real, self.n) }
     }
 
-    fn tear_down(&mut self) {
+    fn tear_down(&mut self) -> f64 {
+        // Drop preloads first. Dropping p_bvc / p_p_new makes device writes visible on host.
+        drop(self.p_bvc.take());
+        drop(self.p_p_new.take());
+
+        drop(self.p_compression.take());
+        drop(self.p_e_old.take());
+        drop(self.p_vnewc.take());
+
+        let checksum = self.update_checksum();
+
         unsafe {
-            free(self.compression);
-            free(self.bvc);
-            free(self.p_new);
-            free(self.e_old);
-            free(self.vnewc);
-            self.compression = core::ptr::null_mut();
-            self.bvc = core::ptr::null_mut();
-            self.p_new = core::ptr::null_mut();
-            self.e_old = core::ptr::null_mut();
-            self.vnewc = core::ptr::null_mut();
+            if !self.compression.is_null() {
+                free(self.compression);
+                self.compression = core::ptr::null_mut();
+            }
+
+            if !self.bvc.is_null() {
+                free(self.bvc);
+                self.bvc = core::ptr::null_mut();
+            }
+
+            if !self.p_new.is_null() {
+                free(self.p_new);
+                self.p_new = core::ptr::null_mut();
+            }
+
+            if !self.e_old.is_null() {
+                free(self.e_old);
+                self.e_old = core::ptr::null_mut();
+            }
+
+            if !self.vnewc.is_null() {
+                free(self.vnewc);
+                self.vnewc = core::ptr::null_mut();
+            }
         }
+
         self.n = 0;
+
+        checksum
     }
 }
 
@@ -158,8 +239,11 @@ fn pressure_calc1(
     n: usize,
 ) {
     let i = Stride1D::<256>::index();
+
     if let Some(v) = bvc.get_mut() {
-        *v = cls * ((*compression)[i] + Real::from(1.0));
+        unsafe {
+            *v = cls * ((*compression)[i] + Real::from(1.0));
+        }
     }
 }
 
@@ -175,6 +259,7 @@ fn pressure_calc2(
     n: usize,
 ) {
     let i = Stride1D::<256>::index();
+
     if let Some(v) = p_new.get_mut() {
         unsafe {
             let mut p = (*bvc)[i] * (*e_old)[i];
@@ -182,9 +267,11 @@ fn pressure_calc2(
             if p.abs() < p_cut {
                 p = Real::from(0.0);
             }
+
             if (*vnewc)[i] >= eosvmax {
                 p = Real::from(0.0);
             }
+
             if p < pmin {
                 p = pmin;
             }
