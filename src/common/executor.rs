@@ -50,7 +50,7 @@ impl<'a> Executor<'a> {
             let t1 = now_ns();
 
             let checksum = kernel.update_checksum();
-            kernel.tear_down();
+            let checksum = kernel.tear_down();
 
             out[i].write(KernelResult {
                 name: kernel.name(),

@@ -186,7 +186,7 @@ impl KernelBase for DelDotVec2D {
         unsafe { calc_checksum(self.div as *const Real, NNALLS) }
     }
 
-    fn tear_down(&mut self) {
+    fn tear_down(&mut self) -> f64 {
         unsafe {
             free(self.x);
             self.x = core::ptr::null_mut();
@@ -201,6 +201,7 @@ impl KernelBase for DelDotVec2D {
             free(self.real_zones);
             self.real_zones = core::ptr::null_mut();
         }
+        unsafe { calc_checksum(self.div as *const Real, NNALLS) }
     }
 }
 
