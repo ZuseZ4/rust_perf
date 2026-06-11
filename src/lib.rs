@@ -44,12 +44,12 @@ use crate::apps::pressure::Pressure;
 #[cfg(all(target_os = "linux", feature = "vol3d"))]
 use crate::apps::vol3d::Vol3D;
 
+#[cfg(all(target_os = "linux", feature = "del_dot_vec_2d"))]
+static mut K_DEL: DelDotVec2D = DelDotVec2D::INIT;
 #[cfg(all(target_os = "linux", feature = "energy"))]
 static mut K_ENERGY: Energy = Energy::INIT;
 #[cfg(all(target_os = "linux", feature = "fir"))]
 static mut K_FIR: Fir = Fir::INIT;
-#[cfg(all(target_os = "linux", feature = "del_dot_vec_2d"))]
-static mut K_DEL: DelDotVec2D = DelDotVec2D::INIT;
 #[cfg(all(target_os = "linux", feature = "ltimes"))]
 static mut K_LTIMES: LTimes = LTimes::INIT;
 #[cfg(all(target_os = "linux", feature = "matvec_3d_stencil"))]
@@ -69,6 +69,11 @@ fn main() {
     let mut k_links: [Option<&mut dyn KernelBase>; MAX_KERNELS] = [const { None }; MAX_KERNELS];
     let mut count = 0;
 
+    #[cfg(feature = "del_dot_vec_2d")]
+    {
+        k_links[count] = Some(unsafe { &mut *(&raw mut K_DEL) });
+        count += 1;
+    }
     #[cfg(feature = "energy")]
     {
         k_links[count] = Some(unsafe { &mut *(&raw mut K_ENERGY) });
@@ -77,11 +82,6 @@ fn main() {
     #[cfg(feature = "fir")]
     {
         k_links[count] = Some(unsafe { &mut *(&raw mut K_FIR) });
-        count += 1;
-    }
-    #[cfg(feature = "del_dot_vec_2d")]
-    {
-        k_links[count] = Some(unsafe { &mut *(&raw mut K_DEL) });
         count += 1;
     }
     #[cfg(feature = "ltimes")]
