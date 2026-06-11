@@ -1,18 +1,44 @@
-set -e
+#set -e
 
 FEATURES_ARGS=("$@")
 
+PTX80_ARGS=(
+  "--device-compiler=nvptx64-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx64-nvidia-cuda=-target-cpu"
+  "--device-compiler=nvptx64-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx64-nvidia-cuda=sm_90a"
+  "--device-compiler=nvptx64-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx64-nvidia-cuda=-target-feature"
+  "--device-compiler=nvptx64-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx64-nvidia-cuda=+ptx80"
 
-CLANG_LINKER_WRAPPER="/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/bin/clang-linker-wrapper" 
+  "--device-compiler=nvptx-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx-nvidia-cuda=-target-cpu"
+  "--device-compiler=nvptx-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx-nvidia-cuda=sm_90a"
+  "--device-compiler=nvptx-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx-nvidia-cuda=-target-feature"
+  "--device-compiler=nvptx-nvidia-cuda=-Xclang"
+  "--device-compiler=nvptx-nvidia-cuda=+ptx80"
+  "--device-linker=nvptx64-nvidia-cuda=--plugin-opt=-mattr=+ptx80"
+  "--device-linker=nvptx-nvidia-cuda=--plugin-opt=-mattr=+ptx80"
+)
+
+CLANG_LINKER_WRAPPER="/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/bin/clang-linker-wrapper"
 #LD_LIBRARY_PATH="/home/mdominguez/workspace/rust/build/x86_64-unknown-linux-gnu/stage1/lib:/home/mdominguez/workspace/rust/build/x86_64-unknown-linux-gnu/offload/lib:$LD_LIBRARY_PATH"
 
-RUSTFLAGS="-Ctarget-cpu=gfx90a --emit=llvm-bc,llvm-ir -Zoffload=Device -Csave-temps -Zunstable-options" \
-cargo +offload build -Zunstable-options -r -v --target amdgcn-amd-amdhsa -Zbuild-std=core,compiler_builtins,panic_abort -Zbuild-std-features=compiler-builtins-mem "${FEATURES_ARGS[@]}"
+RUSTFLAGS="-Ctarget-cpu=sm_90a -C target-feature=+ptx80 --emit=llvm-bc,llvm-ir -Zoffload=Device -Csave-temps -Zunstable-options" \
+cargo +offload build -Zunstable-options -r -v --target nvptx64-nvidia-cuda -Zbuild-std=core,panic_abort "${FEATURES_ARGS[@]}"
 
-RUSTFLAGS="--emit=llvm-bc,llvm-ir -Csave-temps -Zoffload=Host=/p/lustre1/drehwald1/prog/offload/rust_perf/target/amdgcn-amd-amdhsa/release/deps/device.bin -Zunstable-options" \
+RUSTFLAGS="--emit=llvm-bc,llvm-ir -Csave-temps -Zoffload=Host=/p/lustre1/drehwald1/prog/offload/rust_perf/target/nvptx64-nvidia-cuda/release/deps/device.bin -Zunstable-options \
+-Clink-arg=-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/offload/lib \
+-Clink-arg=-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/lib \
+-Clink-arg=-Wl,-rpath,/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/offload/lib \
+-Clink-arg=-Wl,-rpath,/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/lib \
+-Clink-arg=-lomptarget \
+-Clink-arg=-lomp" \
 cargo +offload build -r -Zbuild-std=std,panic_abort "${FEATURES_ARGS[@]}"
 
-DEBUG=""
-#"-Xarch_device -mllvm=-print-before-all -Xarch_device -mllvm=-print-module-scope"
 
-$CLANG_LINKER_WRAPPER "--should-extract=gfx90a" "${DEBUG}" "--device-compiler=amdgcn-amd-amdhsa=-g" "--device-compiler=amdgcn-amd-amdhsa=-save-temps=cwd" "--host-triple=x86_64-unknown-linux-gnu" "--save-temps" "--linker-path=/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/lld/bin/ld.lld" "--hash-style=gnu" "--eh-frame-hdr" "-m" "elf_x86_64" "-pie" "-dynamic-linker" "/lib64/ld-linux-x86-64.so.2" "-o" "bare" "/lib/../lib64/Scrt1.o" "/lib/../lib64/crti.o" "/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12/crtbeginS.o" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/bin/../lib/x86_64-unknown-linux-gnu" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/lib/clang/21/lib/x86_64-unknown-linux-gnu" "-L/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12" "-L/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12/../../../../lib64" "-L/lib/../lib64" "-L/usr/lib64" "-L/lib" "-L/usr/lib" "./target/release/deps/host.o" "-lstdc++" "-lm" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/offload/lib" "-lomp" "-lomptarget" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/lib" "-lgcc_s" "-lgcc" "-lpthread" "-lc" "-lgcc_s" "-lgcc" "/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12/crtendS.o" "/lib/../lib64/crtn.o"
+$CLANG_LINKER_WRAPPER "--should-extract=sm_90a" "--device-compiler=nvptx64-nvidia-cuda=-save-temps=cwd" "--device-compiler=nvptx-nvidia-cuda=-v" "--device-compiler=nvptx64-nvidia-cuda=-v" "${PTX80_ARGS[@]}" "--device-linker=nvptx-nvidia-cuda=-lompdevice" "--device-linker=nvptx-nvidia-cuda=--feature=+ptx80" "--device-compiler=nvptx64-nvidia-cuda=-march=sm_90a" "--device-compiler=nvptx64-nvidia-cuda=-Xclang" "--device-compiler=nvptx64-nvidia-cuda=-target-feature" "--device-compiler=nvptx64-nvidia-cuda=-Xclang" "--device-compiler=nvptx64-nvidia-cuda=+ptx80" "--host-triple=x86_64-unknown-linux-gnu" "--save-temps" "--linker-path=/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/lld/bin/ld.lld" "--hash-style=gnu" "--eh-frame-hdr" "-m" "elf_x86_64" "-pie" "-dynamic-linker" "/lib64/ld-linux-x86-64.so.2" "-o" "bare" "/lib/../lib64/Scrt1.o" "/lib/../lib64/crti.o" "/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12/crtbeginS.o" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/bin/../lib/x86_64-unknown-linux-gnu" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/lib/clang/22/lib/x86_64-unknown-linux-gnu" "-L/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12" "-L/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12/../../../../lib64" "-L/lib/../lib64" "-L/usr/lib64" "-L/lib" "-L/usr/lib" "./target/release/deps/host.o" "-lstdc++" "-lm" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/offload/lib" "-lomp" "-lomptarget" "-L/tmp/drehwald1/prog/rust/build/x86_64-unknown-linux-gnu/llvm/lib" "-lgcc_s" "-lgcc" "-lpthread" "-lc" "-lgcc_s" "-lgcc" "/opt/rh/gcc-toolset-12/root/usr/lib/gcc/x86_64-redhat-linux/12/crtendS.o" "/lib/../lib64/crtn.o"
+
