@@ -1,5 +1,13 @@
-pub const N_DEFAULT: usize = 1000000;
+pub const N_DEFAULT: usize = 1_000_000;
 const DEFAULT_REPS: u32 = 100;
+
+const M_DEFAULT: usize = 100;
+const NPNL: usize = 2;
+const NPNR: usize = 1;
+
+const DIM_SIZE: usize = M_DEFAULT + 1;
+const NN_DIM: usize = DIM_SIZE + NPNL + NPNR;
+const NNALLS: usize = NN_DIM * NN_DIM * NN_DIM;
 
 use core::offload::offload_kernel;
 use rustc_offload_frontend::partition::{OffsetStride1D, PartitioningStrategy, Region};
@@ -8,20 +16,22 @@ use rustc_offload_frontend::partition::{OffsetStride1D, PartitioningStrategy, Re
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{PreloadMut, preload_mut};
+use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{alloc_and_init_data_const, calc_checksum, free};
+
 #[cfg(target_os = "linux")]
 use crate::common::kernel_base::KernelBase;
+
 #[cfg(target_os = "linux")]
 use crate::kernel_name;
 
 #[cfg(target_os = "linux")]
-use crate::common::types::{Real, to_real};
+use crate::common::types::{to_real, Real};
 
 #[cfg(target_os = "linux")]
-pub struct Vol3D {
+pub struct Vol3D<'a> {
     n: usize,
     x: *mut Real,
     y: *mut Real,
@@ -32,10 +42,15 @@ pub struct Vol3D {
     kp: usize,
     fpz: usize,
     lpz: usize,
+
+    p_x: Option<Preload<'a, [Real; NNALLS]>>,
+    p_y: Option<Preload<'a, [Real; NNALLS]>>,
+    p_z: Option<Preload<'a, [Real; NNALLS]>>,
+    p_vol: Option<PreloadMut<'a, [Real; NNALLS]>>,
 }
 
 #[cfg(target_os = "linux")]
-impl Vol3D {
+impl<'a> Vol3D<'a> {
     pub const INIT: Self = Vol3D {
         n: 0,
         x: core::ptr::null_mut(),
@@ -47,11 +62,16 @@ impl Vol3D {
         kp: 0,
         fpz: 0,
         lpz: 0,
+
+        p_x: None,
+        p_y: None,
+        p_z: None,
+        p_vol: None,
     };
 }
 
 #[cfg(target_os = "linux")]
-impl KernelBase for Vol3D {
+impl<'a> KernelBase for Vol3D<'a> {
     fn name(&self) -> &'static str {
         kernel_name!("VOL3D")
     }
@@ -65,15 +85,29 @@ impl KernelBase for Vol3D {
     }
 
     fn setup(&mut self) {
-        self.n = N_DEFAULT;
-        let m: usize = 100;
-        let npnl = 2;
-        let npnr = 1;
+        self.n = self.default_problem_size();
+
+        assert_eq!(
+            self.n, N_DEFAULT,
+            "VOL3D const-array preload version requires n = {N_DEFAULT}, got {}",
+            self.n
+        );
+
+        let m: usize = M_DEFAULT;
+        let npnl = NPNL;
+        let npnr = NPNR;
+
         let dim_size = m + 1;
         let nn_dim = dim_size + npnl + npnr;
+        let nnalls = nn_dim * nn_dim * nn_dim;
+
+        assert_eq!(
+            nnalls, NNALLS,
+            "VOL3D const-array preload version requires NNALLS = {NNALLS}, got {nnalls}",
+        );
+
         self.jp = nn_dim;
         self.kp = nn_dim * nn_dim;
-        let nnalls = nn_dim * nn_dim * nn_dim;
 
         let imin = npnl;
         let imax = npnl + dim_size - 1;
@@ -89,10 +123,10 @@ impl KernelBase for Vol3D {
         self.lpz = (kmax - 1 + npzr) * self.kp + (jmax - 1 + npzr) * self.jp + (imax - 1 + npzr);
 
         unsafe {
-            self.x = alloc_and_init_data_const(nnalls, to_real(0.0));
-            self.y = alloc_and_init_data_const(nnalls, to_real(0.0));
-            self.z = alloc_and_init_data_const(nnalls, to_real(0.0));
-            self.vol = alloc_and_init_data_const(nnalls, to_real(0.0));
+            self.x = alloc_and_init_data_const(NNALLS, to_real(0.0));
+            self.y = alloc_and_init_data_const(NNALLS, to_real(0.0));
+            self.z = alloc_and_init_data_const(NNALLS, to_real(0.0));
+            self.vol = alloc_and_init_data_const(NNALLS, to_real(0.0));
 
             let dx = 0.3;
             let dy = 0.2;
@@ -102,6 +136,7 @@ impl KernelBase for Vol3D {
                 for j in (jmin - npnl)..(jmax + 1 + npnr) {
                     for i in (imin - npnl)..(imax + 1 + npnr) {
                         let inn = i + j * self.jp + k * self.kp;
+
                         *self.x.add(inn) = to_real(i as f64 * dx);
                         *self.y.add(inn) = to_real(j as f64 * dy);
                         *self.z.add(inn) = to_real(k as f64 * dz);
@@ -109,6 +144,19 @@ impl KernelBase for Vol3D {
                 }
             }
         }
+
+        let x_ref: &'a [Real; NNALLS] = unsafe { &*(self.x as *const [Real; NNALLS]) };
+
+        let y_ref: &'a [Real; NNALLS] = unsafe { &*(self.y as *const [Real; NNALLS]) };
+
+        let z_ref: &'a [Real; NNALLS] = unsafe { &*(self.z as *const [Real; NNALLS]) };
+
+        let vol_ref: &'a mut [Real; NNALLS] = unsafe { &mut *(self.vol as *mut [Real; NNALLS]) };
+
+        self.p_x = Some(preload(x_ref));
+        self.p_y = Some(preload(y_ref));
+        self.p_z = Some(preload(z_ref));
+        self.p_vol = Some(preload_mut(vol_ref));
     }
 
     fn run_kernel(&mut self) {
@@ -118,18 +166,24 @@ impl KernelBase for Vol3D {
         let kp = self.kp;
         let count = lpz + 1 - fpz;
 
-        let mut vol = unsafe { &mut *(self.vol as *mut [Real; 1124864]) };
-        let p: PreloadMut<[Real; 1124864]> = preload_mut(&mut vol);
-        let mut vol_reg = Region::<'_, _, OffsetStride1D<256>>::from(&p);
+        self.p_x.as_ref().expect("VOL3D x was not preloaded");
+
+        self.p_y.as_ref().expect("VOL3D y was not preloaded");
+
+        self.p_z.as_ref().expect("VOL3D z was not preloaded");
+
+        let p_vol = self.p_vol.as_ref().expect("VOL3D vol was not preloaded");
+
+        let mut vol_reg = Region::<'_, _, OffsetStride1D<256>>::from(p_vol);
 
         offload! {
             kernel = vol3d,
-            grid_dim = [((count + 255) / 256) as u32, 1, 1],
+            grid_dim = [count.div_ceil(256) as u32, 1, 1],
             block_dim = [256, 1, 1],
             args = (
-                self.x as *const [Real; 1124864],
-                self.y as *const [Real; 1124864],
-                self.z as *const [Real; 1124864],
+                self.x as *const [Real; NNALLS],
+                self.y as *const [Real; NNALLS],
+                self.z as *const [Real; NNALLS],
                 vol_reg,
                 self.vnormq,
                 jp,
@@ -141,21 +195,47 @@ impl KernelBase for Vol3D {
     }
 
     fn update_checksum(&self) -> f64 {
-        unsafe { calc_checksum(self.vol as *const Real, 1124864) }
+        unsafe { calc_checksum(self.vol as *const Real, NNALLS) }
     }
 
-    fn tear_down(&mut self) {
+    fn tear_down(&mut self) -> f64 {
+        // Drop preloads first. Dropping p_vol copies device output back to host.
+        drop(self.p_vol.take());
+        drop(self.p_x.take());
+        drop(self.p_y.take());
+        drop(self.p_z.take());
+
+        let checksum = self.update_checksum();
+
         unsafe {
-            free(self.x);
-            free(self.y);
-            free(self.z);
-            free(self.vol);
-            self.x = core::ptr::null_mut();
-            self.y = core::ptr::null_mut();
-            self.z = core::ptr::null_mut();
-            self.vol = core::ptr::null_mut();
+            if !self.x.is_null() {
+                free(self.x);
+                self.x = core::ptr::null_mut();
+            }
+
+            if !self.y.is_null() {
+                free(self.y);
+                self.y = core::ptr::null_mut();
+            }
+
+            if !self.z.is_null() {
+                free(self.z);
+                self.z = core::ptr::null_mut();
+            }
+
+            if !self.vol.is_null() {
+                free(self.vol);
+                self.vol = core::ptr::null_mut();
+            }
         }
+
         self.n = 0;
+        self.jp = 0;
+        self.kp = 0;
+        self.fpz = 0;
+        self.lpz = 0;
+
+        checksum
     }
 }
 
@@ -164,9 +244,9 @@ use crate::common::types::Real;
 
 #[offload_kernel]
 fn vol3d(
-    x: *const [Real; 1124864],
-    y: *const [Real; 1124864],
-    z: *const [Real; 1124864],
+    x: *const [Real; NNALLS],
+    y: *const [Real; NNALLS],
+    z: *const [Real; NNALLS],
     mut vol: Region<Real, OffsetStride1D<256>>,
     vnormq: Real,
     jp: usize,
@@ -176,6 +256,7 @@ fn vol3d(
 ) {
     let idx = OffsetStride1D::<256>::index();
     let i = fpz + idx;
+
     if i > lpz {
         return;
     }
