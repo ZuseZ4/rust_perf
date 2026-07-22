@@ -1,6 +1,7 @@
 #[cfg(target_os = "linux")]
 extern crate libc;
-
+#[cfg(target_os = "linux")]
+use std::offload::offload::offload_sync;
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::reset_data_init_count;
 #[cfg(target_os = "linux")]
@@ -36,21 +37,37 @@ impl<'a> Executor<'a> {
         out: &'r mut [core::mem::MaybeUninit<KernelResult>; MAX_KERNELS],
     ) -> &'r [KernelResult] {
         let n = self.kernels.len().min(MAX_KERNELS);
+       
+        // warmup
+        //for (i, kernel) in self.kernels.iter_mut().enumerate().take(n) {
+        //    let reps = kernel.default_reps();
+        //    kernel.setup();
+        //    for _ in 0..reps {
+        //        kernel.run_kernel();
+        //    }
+        //    let checksum = kernel.tear_down();
+        //}
 
         for (i, kernel) in self.kernels.iter_mut().enumerate().take(n) {
             let reps = kernel.default_reps();
 
             reset_data_init_count();
             kernel.setup();
+            //warmup
+            //for _ in 0..50 {
+            //    kernel.run_kernel();
+            //}
 
             let t0 = now_ns();
             for _ in 0..reps {
                 kernel.run_kernel();
             }
+            offload_sync();
             let t1 = now_ns();
 
             let checksum = kernel.update_checksum();
             let checksum = kernel.tear_down();
+            //let t1 = now_ns();
 
             out[i].write(KernelResult {
                 name: kernel.name(),

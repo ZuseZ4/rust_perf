@@ -4,8 +4,14 @@
 #![allow(improper_gpu_kernel_arg)]
 #![allow(improper_ctypes_definitions)]
 #![feature(float_algebraic, core_float_math)]
-#![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx, abi_gpu_kernel, gpu_offload))]
-#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu, abi_gpu_kernel, gpu_offload))]
+#![cfg_attr(
+    target_arch = "nvptx64",
+    feature(stdarch_nvptx, abi_gpu_kernel, gpu_offload)
+)]
+#![cfg_attr(
+    target_arch = "amdgpu",
+    feature(stdarch_amdgpu, abi_gpu_kernel, gpu_offload)
+)]
 #![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_std)]
 #![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_main)]
 #![feature(rustc_attrs)]
@@ -62,9 +68,9 @@ static mut K_VOL3D: Vol3D = Vol3D::INIT;
 #[unsafe(no_mangle)]
 #[cfg(target_os = "linux")]
 fn main() {
-    use core::mem::MaybeUninit;
     use crate::common::executor::{Executor, KernelResult, MAX_KERNELS};
     use crate::common::kernel_base::KernelBase;
+    use core::mem::MaybeUninit;
 
     let mut k_links: [Option<&mut dyn KernelBase>; MAX_KERNELS] = [const { None }; MAX_KERNELS];
     let mut count = 0;

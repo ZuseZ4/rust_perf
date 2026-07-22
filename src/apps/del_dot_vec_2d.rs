@@ -312,9 +312,13 @@ fn del_dot_vec_2d(
     let ii = unsafe { (block_idx_x() * block_dim_x() + thread_idx_x()) as usize };
 
     if ii < iend {
+        core::hint::assert_unchecked(ii < N_REAL_ZONES);
         let i = real_zones[ii];
 
         unsafe {
+            core::hint::assert_unchecked(i >= 0);
+            core::hint::assert_unchecked(i < NNALLS);
+            core::hint::assert_unchecked(i + 1 + JP < NNALLS);
             let x1 = x[i];
             let x2 = x[i + 1];
             let x3 = x[i + 1 + JP];
@@ -354,6 +358,7 @@ fn del_dot_vec_2d(
 
             let affine = (fy1 + fy2 + fy3 + fy4) / (y1 + y2 + y3 + y4);
 
+            core::hint::assert_unchecked(i < NNALLS);
             (*div)[i] = dfxdx + dfydy + affine;
         }
     }

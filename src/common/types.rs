@@ -1,7 +1,7 @@
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Sub, SubAssign};
 
 #[repr(transparent)]
-#[derive(Copy, Clone, Default, PartialEq, PartialOrd)]
+#[derive(Copy, Debug, Clone, Default, PartialEq, PartialOrd)]
 pub struct A64(pub f64);
 
 impl Add for A64 {
