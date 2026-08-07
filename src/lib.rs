@@ -1,54 +1,63 @@
 #![allow(internal_features)]
-#![allow(non_snake_case)]
-#![allow(clippy::deref_addrof)]
-#![allow(clippy::too_many_arguments)]
-#![allow(clippy::missing_safety_doc)]
-#![allow(unused_features)]
-#![feature(abi_gpu_kernel)]
-#![feature(core_float_math)]
-#![feature(core_intrinsics)]
-#![feature(float_algebraic)]
+#![allow(linker_messages)]
+#![allow(improper_ctypes)]
+#![allow(improper_gpu_kernel_arg)]
+#![allow(improper_ctypes_definitions)]
+#![feature(stmt_expr_attributes)]
+#![feature(loop_hints)]
+#![feature(float_algebraic, core_float_math)]
+#![cfg_attr(
+    target_arch = "nvptx64",
+    feature(stdarch_nvptx, abi_gpu_kernel, gpu_offload)
+)]
+#![cfg_attr(
+    target_arch = "amdgpu",
+    feature(stdarch_amdgpu, abi_gpu_kernel, gpu_offload)
+)]
+#![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_std)]
+#![cfg_attr(any(target_arch = "nvptx64", target_arch = "amdgpu"), no_main)]
 #![feature(rustc_attrs)]
-#![cfg_attr(target_arch = "amdgpu", feature(stdarch_amdgpu))]
-#![cfg_attr(target_arch = "nvptx64", feature(stdarch_nvptx))]
-#![no_std]
-
-#[cfg(target_os = "linux")]
-extern crate libc;
-
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
+#![cfg_attr(target_os = "linux", feature(core_intrinsics, gpu_offload, offload))]
+#![no_main]
 
 pub mod apps;
 pub mod common;
 
+//use rust_perf;
+
+#[cfg(target_os = "linux")]
+extern crate libc;
+
+//#[panic_handler]
+//fn panic(_: &core::panic::PanicInfo) -> ! {
+//    loop {}
+//}
+
 #[cfg(all(target_os = "linux", feature = "del_dot_vec_2d"))]
-use apps::del_dot_vec_2d::DelDotVec2D;
+use crate::apps::del_dot_vec_2d::DelDotVec2D;
 #[cfg(all(target_os = "linux", feature = "energy"))]
-use apps::energy::Energy;
+use crate::apps::energy::Energy;
 #[cfg(all(target_os = "linux", feature = "fir"))]
-use apps::fir::Fir;
+use crate::apps::fir::Fir;
 
 #[cfg(all(target_os = "linux", feature = "ltimes"))]
-use apps::ltimes::LTimes;
+use crate::apps::ltimes::LTimes;
 
 #[cfg(all(target_os = "linux", feature = "matvec_3d_stencil"))]
-use apps::matvec_3d_stencil::Matvec3DStencil;
+use crate::apps::matvec_3d_stencil::Matvec3DStencil;
 
 #[cfg(all(target_os = "linux", feature = "pressure"))]
-use apps::pressure::Pressure;
+use crate::apps::pressure::Pressure;
 
 #[cfg(all(target_os = "linux", feature = "vol3d"))]
-use apps::vol3d::Vol3D;
+use crate::apps::vol3d::Vol3D;
 
+#[cfg(all(target_os = "linux", feature = "del_dot_vec_2d"))]
+static mut K_DEL: DelDotVec2D = DelDotVec2D::INIT;
 #[cfg(all(target_os = "linux", feature = "energy"))]
 static mut K_ENERGY: Energy = Energy::INIT;
 #[cfg(all(target_os = "linux", feature = "fir"))]
 static mut K_FIR: Fir = Fir::INIT;
-#[cfg(all(target_os = "linux", feature = "del_dot_vec_2d"))]
-static mut K_DEL: DelDotVec2D = DelDotVec2D::INIT;
 #[cfg(all(target_os = "linux", feature = "ltimes"))]
 static mut K_LTIMES: LTimes = LTimes::INIT;
 #[cfg(all(target_os = "linux", feature = "matvec_3d_stencil"))]
@@ -58,8 +67,8 @@ static mut K_PRESSURE: Pressure = Pressure::INIT;
 #[cfg(all(target_os = "linux", feature = "vol3d"))]
 static mut K_VOL3D: Vol3D = Vol3D::INIT;
 
-#[cfg(target_os = "linux")]
 #[unsafe(no_mangle)]
+#[cfg(target_os = "linux")]
 fn main() {
     use crate::common::executor::{Executor, KernelResult, MAX_KERNELS};
     use crate::common::kernel_base::KernelBase;
@@ -68,6 +77,11 @@ fn main() {
     let mut k_links: [Option<&mut dyn KernelBase>; MAX_KERNELS] = [const { None }; MAX_KERNELS];
     let mut count = 0;
 
+    #[cfg(feature = "del_dot_vec_2d")]
+    {
+        k_links[count] = Some(unsafe { &mut *(&raw mut K_DEL) });
+        count += 1;
+    }
     #[cfg(feature = "energy")]
     {
         k_links[count] = Some(unsafe { &mut *(&raw mut K_ENERGY) });
@@ -76,11 +90,6 @@ fn main() {
     #[cfg(feature = "fir")]
     {
         k_links[count] = Some(unsafe { &mut *(&raw mut K_FIR) });
-        count += 1;
-    }
-    #[cfg(feature = "del_dot_vec_2d")]
-    {
-        k_links[count] = Some(unsafe { &mut *(&raw mut K_DEL) });
         count += 1;
     }
     #[cfg(feature = "ltimes")]

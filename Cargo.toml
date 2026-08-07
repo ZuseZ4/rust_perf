@@ -1,3 +1,5 @@
+cargo-features = ["panic-immediate-abort"]
+
 [package]
 name = "rust_perf"
 version = "0.1.0"
@@ -5,9 +7,22 @@ edition = "2024"
 
 [lib]
 crate-type = ["cdylib"]
+#crate-type = ["rlib", "cdylib"]
+path = "src/lib.rs"
 
 [dependencies]
 libc = { version = "0.2.175", default-features = false }
+rustc_offload_frontend = { path = "crates/rustc_offload_frontend" }
+
+[profile.release]
+lto = "fat"
+panic = "immediate-abort"
+codegen-units = 1
+
+[profile.dev]
+lto = "fat"
+panic = "immediate-abort"
+
 
 [features]
 default = ["all", "f64"]
@@ -40,10 +55,3 @@ vol3d = []
 f64 = []
 a64 = []
 
-[profile.release]
-lto = "fat"
-panic = "abort"
-
-[profile.dev]
-lto = "fat"
-panic = "abort"
