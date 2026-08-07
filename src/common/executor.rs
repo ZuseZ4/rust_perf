@@ -15,6 +15,7 @@ pub struct KernelResult {
     pub problem_size: usize,
     pub reps: u32,
     pub total_s: f64,
+    pub launch_s: f64,
     pub checksum: f64,
 }
 
@@ -54,16 +55,20 @@ impl<'a> Executor<'a> {
             reset_data_init_count();
             kernel.setup();
             //warmup
-            //for _ in 0..50 {
-            //    kernel.run_kernel();
-            //}
+            for _ in 0..50 {
+                kernel.run_kernel();
+                //offload_sync();
+            }
+            offload_sync();
 
             let t0 = now_ns();
             for _ in 0..reps {
                 kernel.run_kernel();
+                offload_sync();
             }
-            offload_sync();
             let t1 = now_ns();
+            offload_sync();
+            let t2 = now_ns();
 
             let checksum = kernel.update_checksum();
             let checksum = kernel.tear_down();
@@ -73,7 +78,8 @@ impl<'a> Executor<'a> {
                 name: kernel.name(),
                 problem_size: kernel.default_problem_size(),
                 reps,
-                total_s: (t1 - t0) as f64 * 1e-9,
+                launch_s: (t1 - t0) as f64 * 1e-9,
+                total_s: (t2 - t1) as f64 * 1e-9,
                 checksum,
             });
         }
@@ -85,18 +91,22 @@ impl<'a> Executor<'a> {
         unsafe {
             libc::printf(c"\n".as_ptr());
             libc::printf(
-                c"%-20s %6s %12s %16s %18s\n".as_ptr(),
+                c"%-20s %6s %12s %16s %16s %18s\n".as_ptr(),
                 c"KernelBase".as_ptr(),
                 c"Reps".as_ptr(),
                 c"N".as_ptr(),
+                c"Launch time(s)".as_ptr(),
+                c"Sync time(s)".as_ptr(),
                 c"Total time(s)".as_ptr(),
                 c"Checksum".as_ptr(),
             );
             libc::printf(
-                c"%-20s %6s %12s %16s %18s\n".as_ptr(),
+                c"%-20s %6s %12s %16s %16s %18s\n".as_ptr(),
                 c"----f---------------".as_ptr(),
                 c"------".as_ptr(),
                 c"------------".as_ptr(),
+                c"----------------".as_ptr(),
+                c"----------------".as_ptr(),
                 c"----------------".as_ptr(),
                 c"------------------".as_ptr(),
             );
@@ -106,15 +116,18 @@ impl<'a> Executor<'a> {
                 c"------".as_ptr(),
                 c"------------".as_ptr(),
                 c"----------------".as_ptr(),
+                c"----------------".as_ptr(),
                 c"------------------".as_ptr(),
             );
             for r in results {
                 libc::printf(
-                    c"%-20s %6u %12zu %16.6f %18.6f\n".as_ptr(),
+                    c"%-20s %6u %12zu %16.6f %16.6f %18.6f\n".as_ptr(),
                     r.name.as_bytes().as_ptr(),
                     r.reps as libc::c_uint,
                     r.problem_size as libc::size_t,
+                    r.launch_s,
                     r.total_s,
+                    r.total_s + r.launch_s,
                     r.checksum,
                 );
             }

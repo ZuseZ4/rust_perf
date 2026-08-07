@@ -1,3 +1,4 @@
+#![feature(stmt_expr_attributes)]
 const DEFAULT_PROBLEM_SIZE: usize = 1_000_000;
 const DEFAULT_REPS: u32 = 160;
 
@@ -190,6 +191,9 @@ fn fir(
             let mut sum: Real = Real::from(0.0);
             let mut j = 0;
 
+            //#[unroll(2)]
+            //for j in 0..COEFFLEN {
+            //#[rustc_unroll(4)]
             while j < COEFFLEN {
                 unsafe {
                     sum += (*coeff)[j] * (*m_in)[i + j];

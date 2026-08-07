@@ -242,6 +242,7 @@ fn ltimes(
 
     if m < num_m && g < num_g && z < num_z {
         if let Some(v) = phi.get_mut() {
+            //#[rustc_unroll(8)]
             for d in 0..num_d {
                 let ell_idx = d + num_d * m;
                 let psi_idx = d + num_d * (g + num_g * z);

@@ -3,6 +3,8 @@
 #![allow(improper_ctypes)]
 #![allow(improper_gpu_kernel_arg)]
 #![allow(improper_ctypes_definitions)]
+#![feature(stmt_expr_attributes)]
+#![feature(loop_hints)]
 #![feature(float_algebraic, core_float_math)]
 #![cfg_attr(
     target_arch = "nvptx64",
