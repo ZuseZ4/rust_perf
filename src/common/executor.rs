@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 extern crate libc;
 #[cfg(target_os = "linux")]
-use std::offload::offload::offload_sync;
+use core::offload::offload_sync;
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::reset_data_init_count;
 #[cfg(target_os = "linux")]
@@ -64,6 +64,8 @@ impl<'a> Executor<'a> {
             let t0 = now_ns();
             for _ in 0..reps {
                 kernel.run_kernel();
+                // With `async_launch` the kernels queue up and only the final sync waits.
+                #[cfg(not(feature = "async_launch"))]
                 offload_sync();
             }
             let t1 = now_ns();
@@ -91,7 +93,7 @@ impl<'a> Executor<'a> {
         unsafe {
             libc::printf(c"\n".as_ptr());
             libc::printf(
-                c"%-20s %6s %12s %16s %16s %18s\n".as_ptr(),
+                c"%-20s %6s %12s %16s %16s %18s %18s\n".as_ptr(),
                 c"KernelBase".as_ptr(),
                 c"Reps".as_ptr(),
                 c"N".as_ptr(),
@@ -121,7 +123,7 @@ impl<'a> Executor<'a> {
             );
             for r in results {
                 libc::printf(
-                    c"%-20s %6u %12zu %16.6f %16.6f %18.6f\n".as_ptr(),
+                    c"%-20s %6u %12zu %16.6f %16.6f %18.6f %18.6f\n".as_ptr(),
                     r.name.as_bytes().as_ptr(),
                     r.reps as libc::c_uint,
                     r.problem_size as libc::size_t,

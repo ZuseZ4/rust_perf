@@ -21,7 +21,7 @@ use core::arch::nvptx::{_block_idx_x as block_idx_x, _thread_idx_x as thread_idx
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
+use core::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{

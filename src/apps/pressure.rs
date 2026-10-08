@@ -2,13 +2,13 @@ pub const N_DEFAULT: usize = 1_000_000;
 const DEFAULT_REPS: u32 = 700;
 
 use core::offload::offload_kernel;
-use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D};
+use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride1D, region_mut};
 
 #[cfg(target_os = "linux")]
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
+use core::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{
@@ -148,15 +148,15 @@ impl<'a> KernelBase for Pressure<'a> {
             .as_ref()
             .expect("PRESSURE vnewc was not preloaded");
 
-        let mut bvc_reg = Region::<'_, _, Stride1D<256>>::from(p_bvc);
-        let mut p_new_reg = Region::<'_, _, Stride1D<256>>::from(p_p_new);
+        let mut bvc_reg = region_mut::<_, _, Stride1D<256>>(p_bvc);
+        let mut p_new_reg = region_mut::<_, _, Stride1D<256>>(p_p_new);
 
         offload! {
             kernel = pressure_calc1,
             grid_dim = grid,
             block_dim = block,
             args = (
-                bvc_reg,
+                bvc_reg.reborrow(),
                 self.compression as *const [Real; N_DEFAULT],
                 self.cls,
                 n,
@@ -168,7 +168,7 @@ impl<'a> KernelBase for Pressure<'a> {
             grid_dim = grid,
             block_dim = block,
             args = (
-                p_new_reg,
+                p_new_reg.reborrow(),
                 self.bvc as *const [Real; N_DEFAULT],
                 self.e_old as *const [Real; N_DEFAULT],
                 self.vnewc as *const [Real; N_DEFAULT],

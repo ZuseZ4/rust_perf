@@ -10,13 +10,13 @@ const THREADS_PER_BLOCK: u32 = 256;
 const BLOCKS: u32 = (IEND as u32).div_ceil(THREADS_PER_BLOCK);
 
 use core::offload::offload_kernel;
-use rustc_offload_frontend::partition::{Linear1D, PartitioningStrategy, Region};
+use rustc_offload_frontend::partition::{Linear1D, PartitioningStrategy, Region, region_mut};
 
 #[cfg(target_os = "linux")]
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
+use core::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{
@@ -124,7 +124,7 @@ impl<'a> KernelBase for Fir<'a> {
             return;
         };
 
-        let mut m_out_reg = Region::<'_, _, Linear1D>::from(p_m_out);
+        let mut m_out_reg = region_mut::<_, _, Linear1D>(p_m_out);
 
         let m_in_ref: &[Real; INLEN] = unsafe { &*(self.m_in as *const [Real; INLEN]) };
 
@@ -135,7 +135,7 @@ impl<'a> KernelBase for Fir<'a> {
             grid_dim = [BLOCKS, 1, 1],
             block_dim = [THREADS_PER_BLOCK, 1, 1],
             args = (
-                m_out_reg,
+                m_out_reg.reborrow(),
                 m_in_ref,
                 coeff_ref,
                 IEND,

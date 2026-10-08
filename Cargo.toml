@@ -5,9 +5,14 @@ name = "rust_perf"
 version = "0.1.0"
 edition = "2024"
 
+# The device pass compiles the lib; the host passes build the bin from the same source so the
+# result is a runnable executable (rustc links the device image itself now, no linker-wrapper).
 [lib]
 crate-type = ["cdylib"]
-#crate-type = ["rlib", "cdylib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rust_perf"
 path = "src/lib.rs"
 
 [dependencies]
@@ -54,4 +59,5 @@ pressure = []
 vol3d = []
 f64 = []
 a64 = []
+async_launch = []
 

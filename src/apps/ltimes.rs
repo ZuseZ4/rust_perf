@@ -12,13 +12,13 @@ const ELLLEN: usize = NUM_D * NUM_M;
 const PSILEN: usize = NUM_D * NUM_G * DEFAULT_NUM_Z;
 
 use core::offload::offload_kernel;
-use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride3D};
+use rustc_offload_frontend::partition::{PartitioningStrategy, Region, Stride3D, region_mut};
 
 #[cfg(target_os = "linux")]
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
+use core::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_arch = "amdgpu")]
 use core::arch::amdgpu::{
@@ -163,7 +163,7 @@ impl<'a> KernelBase for LTimes<'a> {
             .as_ref()
             .expect("LTIMES psidat was not preloaded");
 
-        let mut phidat_reg = Region::<'_, _, Stride3D<32, 8, 1, 25, 32>>::from(p_phidat);
+        let mut phidat_reg = region_mut::<_, _, Stride3D<32, 8, 1, 25, 32>>(p_phidat);
 
         let elldat_ref: &[Real; ELLLEN] = unsafe { &*(self.elldat as *const [Real; ELLLEN]) };
 
@@ -174,7 +174,7 @@ impl<'a> KernelBase for LTimes<'a> {
             grid_dim = [grid_x as u32, grid_y as u32, grid_z as u32],
             block_dim = [m_block as u32, g_block as u32, z_block as u32],
             args = (
-                phidat_reg,
+                phidat_reg.reborrow(),
                 elldat_ref,
                 psidat_ref,
                 NUM_D,

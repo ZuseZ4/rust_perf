@@ -10,13 +10,13 @@ const NN_DIM: usize = DIM_SIZE + NPNL + NPNR;
 const NNALLS: usize = NN_DIM * NN_DIM * NN_DIM;
 
 use core::offload::offload_kernel;
-use rustc_offload_frontend::partition::{OffsetStride1D, PartitioningStrategy, Region};
+use rustc_offload_frontend::partition::{OffsetStride1D, PartitioningStrategy, Region, region_mut};
 
 #[cfg(target_os = "linux")]
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
+use core::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{alloc_and_init_data_const, calc_checksum, free};
@@ -174,7 +174,7 @@ impl<'a> KernelBase for Vol3D<'a> {
 
         let p_vol = self.p_vol.as_ref().expect("VOL3D vol was not preloaded");
 
-        let mut vol_reg = Region::<'_, _, OffsetStride1D<256>>::from(p_vol);
+        let mut vol_reg = region_mut::<_, _, OffsetStride1D<256>>(p_vol);
 
         offload! {
             kernel = vol3d,
@@ -184,7 +184,7 @@ impl<'a> KernelBase for Vol3D<'a> {
                 self.x as *const [Real; NNALLS],
                 self.y as *const [Real; NNALLS],
                 self.z as *const [Real; NNALLS],
-                vol_reg,
+                vol_reg.reborrow(),
                 self.vnormq,
                 jp,
                 kp,

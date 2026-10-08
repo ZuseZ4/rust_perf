@@ -23,7 +23,7 @@ use core::offload::offload_kernel;
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
+use core::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_arch = "amdgpu")]
 #[inline(always)]

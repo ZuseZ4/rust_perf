@@ -10,13 +10,13 @@ const THREADS_PER_BLOCK: u32 = 256;
 const BLOCKS: u32 = (IEND as u32).div_ceil(THREADS_PER_BLOCK);
 
 use core::offload::offload_kernel;
-use rustc_offload_frontend::partition::{Linear1D, PartitioningStrategy, Region};
+use rustc_offload_frontend::partition::{Linear1D, PartitioningStrategy, Region, region_mut};
 
 #[cfg(target_os = "linux")]
 use rustc_offload_frontend::offload;
 
 #[cfg(target_os = "linux")]
-use core::offload::offload::{preload, preload_mut, Preload, PreloadMut};
+use core::offload::{preload, preload_mut, Preload, PreloadMut};
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{
@@ -256,8 +256,8 @@ impl<'a> KernelBase for Energy<'a> {
             .as_ref()
             .expect("ENERGY vnewc was not preloaded");
 
-        let mut e_new_reg = Region::<'_, _, Linear1D>::from(p_e_new);
-        let mut q_new_reg = Region::<'_, _, Linear1D>::from(p_q_new);
+        let mut e_new_reg = region_mut::<_, _, Linear1D>(p_e_new);
+        let mut q_new_reg = region_mut::<_, _, Linear1D>(p_q_new);
 
         unsafe {
             offload! {
@@ -265,7 +265,7 @@ impl<'a> KernelBase for Energy<'a> {
                 grid_dim = [BLOCKS, 1, 1],
                 block_dim = [THREADS_PER_BLOCK, 1, 1],
                 args = (
-                    e_new_reg,
+                    e_new_reg.reborrow(),
                     &*(self.e_old as *const [Real; IEND]),
                     &*(self.delvc as *const [Real; IEND]),
                     &*(self.p_old as *const [Real; IEND]),
@@ -281,10 +281,10 @@ impl<'a> KernelBase for Energy<'a> {
                 block_dim = [THREADS_PER_BLOCK, 1, 1],
                 args = (
                     &*(self.delvc as *const [Real; IEND]),
-                    q_new_reg,
+                    q_new_reg.reborrow(),
                     &*(self.comp_half_step as *const [Real; IEND]),
                     &*(self.p_half_step as *const [Real; IEND]),
-                    e_new_reg,
+                    e_new_reg.reborrow(),
                     &*(self.bvc as *const [Real; IEND]),
                     &*(self.pbvc as *const [Real; IEND]),
                     &*(self.ql_old as *const [Real; IEND]),
@@ -299,7 +299,7 @@ impl<'a> KernelBase for Energy<'a> {
                 grid_dim = [BLOCKS, 1, 1],
                 block_dim = [THREADS_PER_BLOCK, 1, 1],
                 args = (
-                    e_new_reg,
+                    e_new_reg.reborrow(),
                     &*(self.delvc as *const [Real; IEND]),
                     &*(self.p_old as *const [Real; IEND]),
                     &*(self.q_old as *const [Real; IEND]),
@@ -314,7 +314,7 @@ impl<'a> KernelBase for Energy<'a> {
                 grid_dim = [BLOCKS, 1, 1],
                 block_dim = [THREADS_PER_BLOCK, 1, 1],
                 args = (
-                    e_new_reg,
+                    e_new_reg.reborrow(),
                     &*(self.work as *const [Real; IEND]),
                     self.e_cut,
                     self.emin,
@@ -329,7 +329,7 @@ impl<'a> KernelBase for Energy<'a> {
                 args = (
                     &*(self.delvc as *const [Real; IEND]),
                     &*(self.pbvc as *const [Real; IEND]),
-                    e_new_reg,
+                    e_new_reg.reborrow(),
                     &*(self.vnewc as *const [Real; IEND]),
                     &*(self.bvc as *const [Real; IEND]),
                     &*(self.p_new as *const [Real; IEND]),
@@ -353,11 +353,11 @@ impl<'a> KernelBase for Energy<'a> {
                 args = (
                     &*(self.delvc as *const [Real; IEND]),
                     &*(self.pbvc as *const [Real; IEND]),
-                    e_new_reg,
+                    e_new_reg.reborrow(),
                     &*(self.vnewc as *const [Real; IEND]),
                     &*(self.bvc as *const [Real; IEND]),
                     &*(self.p_new as *const [Real; IEND]),
-                    q_new_reg,
+                    q_new_reg.reborrow(),
                     &*(self.ql_old as *const [Real; IEND]),
                     &*(self.qq_old as *const [Real; IEND]),
                     self.rho0,

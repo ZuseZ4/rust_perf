@@ -58,6 +58,7 @@ macro_rules! offload {
             $grid_dim,
             $block_dim,
             $dyn_cache,
+            -1,
             $args,
         )
     };
