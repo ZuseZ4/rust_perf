@@ -1,0 +1,709 @@
+From 3196f3cc9833bf698d241dbd395a1018ad8f93ed Mon Sep 17 00:00:00 2001
+From: Manuel Drehwald <git@manuel.drehwald.info>
+Date: Thu, 8 Oct 2026 12:36:27 -0400
+Subject: [PATCH 9/9] bench: restore async kernel launch and offload_sync on
+ top of #156620
+
+Reverse of 1028fdb9c2c (simplify offload preload to always be sync), adapted to the
+manifest-era gpu_offload.rs and the current builder.call signature. The launch now goes
+through __tgt_target_kernel_async with a thread-local async info; preload_end and
+offload_sync synchronize it. Needs the libomptarget side from llvm/llvm-project#212862.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ compiler/rustc_attr_ir/src/lang_items.rs      |   6 +
+ .../src/builder/gpu_helper.rs                 |  64 ++++-
+ .../src/builder/gpu_offload.rs                | 240 ++++++++++++++++--
+ compiler/rustc_codegen_llvm/src/intrinsic.rs  |  47 +++-
+ .../rustc_codegen_ssa/src/mir/intrinsic.rs    |   1 +
+ .../rustc_hir_analysis/src/check/intrinsic.rs |   6 +-
+ compiler/rustc_span/src/symbol.rs             |   5 +
+ library/core/src/intrinsics/mod.rs            |   5 +
+ library/core/src/offload/mod.rs               |  22 +-
+ 9 files changed, 351 insertions(+), 45 deletions(-)
+
+diff --git a/compiler/rustc_attr_ir/src/lang_items.rs b/compiler/rustc_attr_ir/src/lang_items.rs
+index 60890f77992..a221ef45721 100644
+--- a/compiler/rustc_attr_ir/src/lang_items.rs
++++ b/compiler/rustc_attr_ir/src/lang_items.rs
+@@ -343,6 +343,12 @@ fn stable_hash<Hcx: StableHashCtxt>(&self, _: &mut Hcx, hasher: &mut StableHashe
+     DropGlue,                sym::drop_glue,           drop_glue_fn,               Target::Fn,             GenericRequirement::Exact(1);
+     AllocLayout,             sym::alloc_layout,        alloc_layout,               Target::Struct,         GenericRequirement::None;
+ 
++    // Compiler-generated mapper functions for gpu offloading
++    PreloadStruct,        sym::preload_type,        preload_type,        Target::Struct, GenericRequirement::None;
++    PreloadMutStruct,     sym::preload_mut_type,    preload_mut_type,    Target::Struct, GenericRequirement::None;
++    PreloadFn,            sym::preload,             preload_fn,          Target::Fn,     GenericRequirement::None;
++    PreloadMutFn,         sym::preload_mut,         preload_mut_fn,      Target::Fn,     GenericRequirement::None;
++
+     /// For all binary crates without `#![no_main]`, Rust will generate a "main" function.
+     /// The exact name and signature are target-dependent. The "main" function will invoke
+     /// this lang item, passing it the `argc` and `argv` (or null, if those don't exist
+diff --git a/compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs b/compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs
+index 61c91614301..0e9b4a40639 100644
+--- a/compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs
++++ b/compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs
+@@ -1,13 +1,16 @@
+-use crate::SimpleCx;
+-use crate::builder::Builder;
+-use crate::llvm;
+-use crate::llvm::{Type, Value};
+ use rustc_abi::Align;
+ use rustc_codegen_ssa::MemFlags;
+ use rustc_codegen_ssa::common::TypeKind;
+ use rustc_codegen_ssa::traits::{BaseTypeCodegenMethods, BuilderMethods, ReturnSlot};
+-use rustc_middle::bug;
+ use rustc_middle::ty::offload_meta::{OffloadMetadata, OffloadSize};
++use rustc_span::bug;
++
++use crate::builder::Builder;
++use crate::builder::gpu_offload::OffloadGlobals;
++use crate::context::SimpleCx;
++use crate::intrinsic::TransferType;
++use crate::llvm;
++use crate::llvm::{Type, Value};
+ 
+ pub(crate) fn scalar_width<'ll>(cx: &'ll SimpleCx<'_>, ty: &'ll Type) -> u64 {
+     match cx.type_kind(ty) {
+@@ -59,21 +62,70 @@ pub(crate) fn get_geps<'ll, 'tcx>(
+     [gep1, gep2, gep3]
+ }
+ 
++pub(crate) fn synchronize_async_info<'ll, 'tcx>(
++    builder: &mut Builder<'_, 'll, 'tcx>,
++    offload_globals: &OffloadGlobals<'ll>,
++) {
++    let cx = builder.cx;
++    let ptr_ty = cx.type_ptr();
++    let null = cx.const_null(ptr_ty);
++
++    let async_info = builder.load(ptr_ty, offload_globals.async_info_global, Align::EIGHT);
++
++    let is_null = builder.icmp(rustc_codegen_ssa::common::IntPredicate::IntEQ, async_info, null);
++
++    let sync_bb = Builder::append_block(cx, builder.llfn(), "offload.async.sync");
++    let done_bb = Builder::append_block(cx, builder.llfn(), "offload.async.sync.done");
++
++    builder.cond_br(is_null, done_bb, sync_bb);
++
++    unsafe {
++        llvm::LLVMPositionBuilderAtEnd(&builder.llbuilder, sync_bb);
++    }
++
++    builder.call(
++        offload_globals.async_info_synchronize_ty,
++        None,
++        None,
++        offload_globals.async_info_synchronize,
++        ReturnSlot::Direct,
++        &[async_info],
++        None,
++        None,
++    );
++
++    builder.br(done_bb);
++
++    unsafe {
++        llvm::LLVMPositionBuilderAtEnd(&builder.llbuilder, done_bb);
++    }
++}
++
+ pub(crate) fn generate_mapper_call<'ll, 'tcx>(
+     builder: &mut Builder<'_, 'll, 'tcx>,
+     geps: [&'ll Value; 3],
++    offload_globals: &OffloadGlobals<'ll>,
+     o_type: &'ll Value,
+     fn_to_call: &'ll Value,
+     fn_ty: &'ll Type,
+     num_args: u64,
+     s_ident_t: &'ll Value,
++    transfer: TransferType,
+ ) {
+     let cx = builder.cx;
+     let nullptr = cx.const_null(cx.type_ptr());
+     let i64_max = cx.get_const_i64(u64::MAX);
+     let num_args = cx.get_const_i32(num_args);
+-    let args =
++    let mut args =
+         vec![s_ident_t, i64_max, num_args, geps[0], geps[1], geps[2], o_type, nullptr, nullptr];
++    if matches!(transfer, TransferType::NowaitBegin) {
++        let i32_0 = cx.get_const_i32(0);
++        args.append(&mut vec![i32_0, nullptr, i32_0, nullptr]);
++    }
++    if matches!(transfer, TransferType::End) {
++        // Unmapping must not race with kernels still in flight on the async queue.
++        synchronize_async_info(builder, offload_globals);
++    }
+     builder.call(fn_ty, None, None, fn_to_call, ReturnSlot::Direct, &args, None, None);
+ }
+ 
+diff --git a/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs b/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs
+index ec7c9ccc4f0..87a95e27dea 100644
+--- a/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs
++++ b/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs
+@@ -3,6 +3,7 @@
+ use bitflags::Flags;
+ use llvm::Linkage::*;
+ use rustc_abi::Align;
++use rustc_codegen_ssa::common::IntPredicate;
+ use rustc_codegen_ssa::mir::operand::{OperandRef, OperandValue};
+ use rustc_codegen_ssa::traits::{BaseTypeCodegenMethods, BuilderMethods, ReturnSlot};
+ use rustc_middle::ty::offload_meta::{MappingFlags, OffloadMetadata, OffloadSize};
+@@ -17,6 +18,9 @@
+ use crate::llvm::AttributePlace::Function;
+ use crate::llvm::{self, Linkage, Type, Value};
+ 
++//int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
++//int32 __kmpc_global_thread_num(ident_t *);
++
+ // LLVM kernel-independent globals required for offloading
+ pub(crate) struct OffloadGlobals<'ll> {
+     pub launcher_fn: &'ll llvm::Value,
+@@ -30,7 +34,27 @@ pub(crate) struct OffloadGlobals<'ll> {
+     pub end_mapper: &'ll llvm::Value,
+     pub mapper_fn_ty: &'ll llvm::Type,
+ 
++    pub nowait_begin_mapper: &'ll llvm::Value,
++    pub nowait_mapper_fn_ty: &'ll llvm::Type,
++
+     pub ident_t_global: &'ll llvm::Value,
++
++    //pub taskwait: &'ll llvm::Value,
++    //pub taskwait_ty: &'ll llvm::Type,
++    //pub threadnum: &'ll llvm::Value,
++    //pub threadnum_ty: &'ll llvm::Type,
++    pub async_info_create: &'ll Value,
++    pub async_info_create_ty: &'ll Type,
++
++    pub async_info_synchronize: &'ll Value,
++    pub async_info_synchronize_ty: &'ll Type,
++
++    pub async_info_destroy: &'ll Value,
++    pub async_info_destroy_ty: &'ll Type,
++
++    pub async_kernel_launcher: &'ll Value,
++    pub async_kernel_launcher_ty: &'ll Type,
++    pub async_info_global: &'ll llvm::Value,
+ }
+ 
+ impl<'ll> OffloadGlobals<'ll> {
+@@ -39,25 +63,149 @@ pub(crate) fn declare(cx: &CodegenCx<'ll, '_>) -> Self {
+         let kernel_args_ty = KernelArgsTy::new_decl(cx);
+         let offload_entry_ty = TgtOffloadEntry::new_decl(cx);
+         let (begin_mapper, _, end_mapper, mapper_fn_ty) = gen_tgt_data_mappers(cx);
++        let (nowait_begin_mapper, nowait_mapper_fn_ty) = gen_tgt_data_nowait_mappers(cx);
+         let ident_t_global = generate_at_one(cx);
+-
++        //let (taskwait, taskwait_ty, threadnum, threadnum_ty) = generate_sync(cx);
++        // ptr __tgt_async_info_create(i64)
++        let async_info_create_ty = cx.type_func(&[cx.type_i64()], cx.type_ptr());
++
++        // i32 __tgt_async_info_synchronize(ptr)
++        let async_info_synchronize_ty = cx.type_func(&[cx.type_ptr()], cx.type_i32());
++
++        // void __tgt_async_info_destroy(ptr)
++        let async_info_destroy_ty = cx.type_func(&[cx.type_ptr()], cx.type_void());
++
++        // i32 __tgt_target_kernel_async(
++        //     ptr ident,
++        //     i64 device,
++        //     i32 num_teams,
++        //     i32 thread_limit,
++        //     ptr host_ptr,
++        //     ptr kernel_args,
++        //     ptr async_info)
++        let async_kernel_launcher_ty = cx.type_func(
++            &[
++                cx.type_ptr(),
++                cx.type_i64(),
++                cx.type_i32(),
++                cx.type_i32(),
++                cx.type_ptr(),
++                cx.type_ptr(),
++                cx.type_ptr(),
++            ],
++            cx.type_i32(),
++        );
+         // We want LLVM's openmp-opt pass to pick up and optimize this module, since it covers both
+         // openmp and offload optimizations.
+         llvm::add_module_flag_u32(cx.llmod(), llvm::ModuleFlagMergeBehavior::Max, "openmp", 51);
+ 
++        let async_info_create =
++            declare_offload_fn(cx, "__tgt_async_info_create", async_info_create_ty);
++
++        let async_info_synchronize =
++            declare_offload_fn(cx, "__tgt_async_info_synchronize", async_info_synchronize_ty);
++
++        let async_info_destroy =
++            declare_offload_fn(cx, "__tgt_async_info_destroy", async_info_destroy_ty);
++
++        let async_kernel_launcher =
++            declare_offload_fn(cx, "__tgt_target_kernel_async", async_kernel_launcher_ty);
++        let async_info_global = get_or_create_async_info_global(cx);
+         OffloadGlobals {
+             launcher_fn,
+             launcher_ty,
+             kernel_args_ty,
+             offload_entry_ty,
+             begin_mapper,
++            nowait_begin_mapper,
+             end_mapper,
+             mapper_fn_ty,
++            nowait_mapper_fn_ty,
+             ident_t_global,
++            //taskwait,
++            //taskwait_ty,
++            //threadnum,
++            //threadnum_ty,
++            async_info_create,
++            async_info_create_ty,
++
++            async_info_synchronize,
++            async_info_synchronize_ty,
++
++            async_info_destroy,
++            async_info_destroy_ty,
++
++            async_kernel_launcher,
++            async_kernel_launcher_ty,
++            async_info_global,
+         }
+     }
+ }
+ 
++fn get_or_create_async_info_global<'ll, 'tcx>(cx: &CodegenCx<'ll, 'tcx>) -> &'ll llvm::Value {
++    let name = c"__rust_offload_async_info";
++
++    if let Some(global) = unsafe { llvm::LLVMGetNamedGlobal(cx.llmod, name.as_ptr()) } {
++        return global;
++    }
++
++    let global = unsafe { llvm::LLVMAddGlobal(cx.llmod, cx.type_ptr(), name.as_ptr()) };
++
++    unsafe {
++        llvm::LLVMSetInitializer(global, cx.const_null(cx.type_ptr()));
++        llvm::set_thread_local_mode(global, llvm::ThreadLocalMode::GeneralDynamic);
++        llvm::LLVMSetLinkage(global, llvm::Linkage::LinkOnceODRLinkage);
++    }
++
++    global
++}
++
++pub(crate) fn get_or_create_async_info<'ll, 'tcx>(
++    builder: &mut Builder<'_, 'll, 'tcx>,
++    offload_globals: &OffloadGlobals<'ll>,
++) -> &'ll Value {
++    let cx = builder.cx;
++    let ptr_ty = cx.type_ptr();
++    let null = cx.const_null(ptr_ty);
++
++    let current = builder.load(ptr_ty, offload_globals.async_info_global, Align::EIGHT);
++
++    let is_null = builder.icmp(IntPredicate::IntEQ, current, null);
++
++    let create_bb = Builder::append_block(cx, builder.llfn(), "offload.async.create");
++    let ready_bb = Builder::append_block(cx, builder.llfn(), "offload.async.ready");
++
++    builder.cond_br(is_null, create_bb, ready_bb);
++
++    unsafe {
++        llvm::LLVMPositionBuilderAtEnd(&builder.llbuilder, create_bb);
++    }
++
++    let device_id = cx.get_const_i64(u64::MAX); // -1/default device
++
++    let created = builder.call(
++        offload_globals.async_info_create_ty,
++        None,
++        None,
++        offload_globals.async_info_create,
++        ReturnSlot::Direct,
++        &[device_id],
++        None,
++        None,
++    );
++
++    builder.store(created, offload_globals.async_info_global, Align::EIGHT);
++
++    builder.br(ready_bb);
++
++    unsafe {
++        llvm::LLVMPositionBuilderAtEnd(&builder.llbuilder, ready_bb);
++    }
++
++    // Reload instead of needing a phi.
++    builder.load(ptr_ty, offload_globals.async_info_global, Align::EIGHT)
++}
++
+ pub(crate) struct OffloadKernelDims<'ll> {
+     num_workgroups: &'ll Value,
+     threads_per_block: &'ll Value,
+@@ -138,6 +286,28 @@ pub(crate) fn declare_omp_get_num_devices<'ll>(
+     (tgt_decl, tgt_fn_ty)
+ }
+ 
++//fn generate_sync<'ll>(
++//    cx: &CodegenCx<'ll, '_>,
++//) -> (&'ll llvm::Value, &'ll llvm::Type, &'ll llvm::Value, &'ll llvm::Type) {
++//    let tptr = cx.type_ptr();
++//    let ti32 = cx.type_i32();
++//    let args1 = vec![tptr, ti32];
++//    let args2 = vec![tptr];
++//    let fn_ty1 = cx.type_func(&args1, ti32);
++//    let fn_ty2 = cx.type_func(&args2, ti32);
++//    let name1 = "__kmpc_omp_taskwait";
++//    let name2 = "__kmpc_global_thread_num";
++//    let decl1 = declare_offload_fn(&cx, name1, fn_ty1);
++//    let decl2 = declare_offload_fn(&cx, name2, fn_ty2);
++//
++//    let nounwind = llvm::AttributeKind::NoUnwind.create_attr(cx.llcx);
++//    attributes::apply_to_llfn(decl1, Function, &[nounwind]);
++//    attributes::apply_to_llfn(decl2, Function, &[nounwind]);
++//    //int32 __kmpc_omp_taskwait(ident_t *loc_ref, kmp_int32 gtid);
++//    //int32 __kmpc_global_thread_num(ident_t *);
++//    (decl1, fn_ty1, decl2, fn_ty2)
++//}
++
+ // What is our @1 here? A magic global, used in our data_{begin/update/end}_mapper:
+ // @0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
+ // @1 = private unnamed_addr constant %struct.ident_t { i32 0, i32 2, i32 0, i32 22, ptr @0 }, align 8
+@@ -294,6 +464,24 @@ pub(crate) struct OffloadKernelGlobals<'ll> {
+     pub region_id: &'ll llvm::Value,
+ }
+ 
++fn gen_tgt_data_nowait_mappers<'ll>(
++    cx: &CodegenCx<'ll, '_>,
++) -> (&'ll llvm::Value, &'ll llvm::Type) {
++    let tptr = cx.type_ptr();
++    let ti64 = cx.type_i64();
++    let ti32 = cx.type_i32();
++
++    let args = vec![tptr, ti64, ti32, tptr, tptr, tptr, tptr, tptr, tptr, ti32, tptr, ti32, tptr];
++    let mapper_fn_ty = cx.type_func(&args, cx.type_void());
++    let mapper_begin = "__tgt_target_data_begin_nowait_mapper";
++    let begin_mapper_decl = declare_offload_fn(&cx, mapper_begin, mapper_fn_ty);
++
++    let nounwind = llvm::AttributeKind::NoUnwind.create_attr(cx.llcx);
++    attributes::apply_to_llfn(begin_mapper_decl, Function, &[nounwind]);
++
++    (begin_mapper_decl, mapper_fn_ty)
++}
++
+ fn gen_tgt_data_mappers<'ll>(
+     cx: &CodegenCx<'ll, '_>,
+ ) -> (&'ll llvm::Value, &'ll llvm::Value, &'ll llvm::Value, &'ll llvm::Type) {
+@@ -390,6 +578,7 @@ pub(crate) fn gen_define_handling<'ll>(
+     let valid_begin_mappings = MappingFlags::TO | MappingFlags::LITERAL | MappingFlags::IMPLICIT;
+     let transfer_to: Vec<u64> =
+         transfer.iter().map(|m| m.intersection(valid_begin_mappings).bits()).collect();
++    //dbg!(&transfer);
+     let transfer_from: Vec<u64> =
+         transfer.iter().map(|m| m.intersection(MappingFlags::FROM).bits()).collect();
+     let valid_kernel_mappings = MappingFlags::LITERAL | MappingFlags::IMPLICIT;
+@@ -530,8 +719,9 @@ pub(crate) fn gen_call_handling<'ll, 'tcx>(
+ 
+     let has_dynamic = metadata.iter().any(|m| !matches!(m.payload_size, OffloadSize::Static(_)));
+ 
+-    let tgt_decl = offload_globals.launcher_fn;
+-    let tgt_target_kernel_ty = offload_globals.launcher_ty;
++    let tgt_decl = offload_globals.async_kernel_launcher; //launcher_fn
++    //let tgt_target_kernel_ty = offload_globals.launcher_ty;
++    let tgt_target_kernel_ty = offload_globals.async_kernel_launcher_ty;
+ 
+     let tgt_kernel_decl = offload_globals.kernel_args_ty;
+     let begin_mapper_decl = offload_globals.begin_mapper;
+@@ -556,15 +746,17 @@ pub(crate) fn gen_call_handling<'ll, 'tcx>(
+     // Step 2)
+     let s_ident_t = offload_globals.ident_t_global;
+     let geps = get_geps(builder, ty, ty2, a1, a2, a4, has_dynamic);
+-    generate_mapper_call(
+-        builder,
+-        geps,
+-        memtransfer_begin,
+-        begin_mapper_decl,
+-        fn_ty,
+-        num_args,
+-        s_ident_t,
+-    );
++    //generate_mapper_call(
++    //    builder,
++    //    geps,
++    //    offload_globals,
++    //    memtransfer_begin,
++    //    begin_mapper_decl,
++    //    fn_ty,
++    //    num_args,
++    //    s_ident_t,
++    //    TransferType::Kernel,
++    //);
+     let values = KernelArgsTy::new(
+         &cx,
+         num_args,
+@@ -587,19 +779,23 @@ pub(crate) fn gen_call_handling<'ll, 'tcx>(
+     }
+ 
+     let device_id = builder.sext(device_id, cx.type_i64());
+-    let args = vec![s_ident_t, device_id, num_workgroups, threads_per_block, region_id, a5];
++    let async_info = get_or_create_async_info(builder, offload_globals);
++    let args =
++        vec![s_ident_t, device_id, num_workgroups, threads_per_block, region_id, a5, async_info];
+     builder.call(tgt_target_kernel_ty, None, None, tgt_decl, ReturnSlot::Direct, &args, None, None);
+     // %41 = call i32 @__tgt_target_kernel(ptr @1, i64 -1, i32 2097152, i32 256, ptr @.kernel_1.region_id, ptr %kernel_args)
+ 
+     // Step 4)
+     let geps = get_geps(builder, ty, ty2, a1, a2, a4, has_dynamic);
+-    generate_mapper_call(
+-        builder,
+-        geps,
+-        memtransfer_end,
+-        end_mapper_decl,
+-        fn_ty,
+-        num_args,
+-        s_ident_t,
+-    );
++    //generate_mapper_call(
++    //    builder,
++    //    geps,
++    //    offload_globals,
++    //    memtransfer_end,
++    //    end_mapper_decl,
++    //    fn_ty,
++    //    num_args,
++    //    s_ident_t,
++    //    TransferType::Kernel,
++    //);
+ }
+diff --git a/compiler/rustc_codegen_llvm/src/intrinsic.rs b/compiler/rustc_codegen_llvm/src/intrinsic.rs
+index 4dafc8d62dd..bcead45690b 100644
+--- a/compiler/rustc_codegen_llvm/src/intrinsic.rs
++++ b/compiler/rustc_codegen_llvm/src/intrinsic.rs
+@@ -21,7 +21,7 @@
+ use rustc_middle::mir::BinOp;
+ use rustc_middle::ty::consts::ConstExt;
+ use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, HasTypingEnv, LayoutOf};
+-use rustc_middle::ty::offload_meta::{OffloadMetadata, MappingFlags};
++use rustc_middle::ty::offload_meta::OffloadMetadata;
+ use rustc_middle::ty::{self, GenericArgsRef, Instance, SimdAlign, Ty, TyCtxt, TypingEnv};
+ use rustc_session::diagnostics::feature_err;
+ use rustc_span::{ErrorGuaranteed, Span, Symbol, bug, span_bug, sym};
+@@ -36,10 +36,7 @@
+ use crate::abi::FnAbiLlvmExt;
+ use crate::builder::Builder;
+ use crate::builder::autodiff::{adjust_activity_to_abi, generate_enzyme_call};
+-use crate::builder::gpu_offload::*;
+-use crate::builder::gpu_offload::{
+-    self, OffloadKernelDims, declare_omp_get_num_devices,
+-};
++use crate::builder::gpu_offload::{self, OffloadKernelDims, declare_omp_get_num_devices, *};
+ use crate::context::CodegenCx;
+ use crate::declare::declare_raw_fn;
+ use crate::diagnostics::{
+@@ -233,6 +230,10 @@ fn codegen_intrinsic_call(
+             sym::autodiff => {
+                 return codegen_autodiff(self, instance, args, result_layout, result_place);
+             }
++            sym::offload_sync => {
++                codegen_offload_sync(self);
++                return IntrinsicResult::WroteIntoPlace;
++            }
+ 
+             sym::offload_preload => {
+                 codegen_offload_preload(self, tcx, args, TransferType::Begin);
+@@ -1932,6 +1933,16 @@ fn codegen_autodiff<'ll, 'tcx>(
+     )
+ }
+ 
++fn codegen_offload_sync<'ll, 'tcx>(bx: &mut Builder<'_, 'll, 'tcx>) {
++    let cx = bx.cx;
++    let offload_globals_ref = cx.offload_globals.borrow();
++    let offload_globals = match offload_globals_ref.as_ref() {
++        Some(globals) => globals,
++        None => bug!("offload globals were not initialized"),
++    };
++    crate::builder::gpu_helper::synchronize_async_info(bx, offload_globals);
++}
++
+ // For each preload{_mut} *call*, we now use some of our previous declared globals to move data to the gpu.
+ // For now, we only handle the data transfer part of it. Consecutive calls become a no-op on the
+ // LLVM side.
+@@ -1984,9 +1995,20 @@ fn codegen_offload_preload<'ll, 'tcx>(
+     let target_symbol = cx.generate_local_symbol_name("");
+     let offload_data =
+         gen_define_handling(&cx, metadata, target_symbol, offload_globals, transfer_type);
+-    let (b,c) = match transfer_type {
+-        TransferType::Begin => (offload_data.memtransfer_begin, offload_globals.begin_mapper),
+-        TransferType::End => (offload_data.memtransfer_end, offload_globals.end_mapper),
++    let (b, c, mapper_fn_ty) = match transfer_type {
++        TransferType::Begin => (
++            offload_data.memtransfer_begin,
++            offload_globals.begin_mapper,
++            offload_globals.mapper_fn_ty,
++        ),
++        TransferType::NowaitBegin => (
++            offload_data.memtransfer_begin,
++            offload_globals.nowait_begin_mapper,
++            offload_globals.nowait_mapper_fn_ty,
++        ),
++        TransferType::End => {
++            (offload_data.memtransfer_end, offload_globals.end_mapper, offload_globals.mapper_fn_ty)
++        }
+         // logic bug
+         TransferType::Kernel => bug!("Kernel transfer type is not valid for preload"),
+     };
+@@ -2004,14 +2026,19 @@ fn codegen_offload_preload<'ll, 'tcx>(
+     crate::builder::gpu_helper::generate_mapper_call(
+         bx,
+         geps,
+-        b,c,
+-        offload_globals.mapper_fn_ty,
++        offload_globals,
++        b,
++        c,
++        mapper_fn_ty,
+         1,
+         offload_globals.ident_t_global,
++        transfer_type,
+     );
+ }
+ 
++#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+ pub(crate) enum TransferType {
++    NowaitBegin,
+     Begin,
+     Kernel,
+     End,
+diff --git a/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs b/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs
+index e6b70ce2ca7..8d99425864e 100644
+--- a/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs
++++ b/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs
+@@ -136,6 +136,7 @@ pub fn codegen_intrinsic_call(
+                 | sym::atomic_singlethreadfence
+                 | sym::caller_location
+                 | sym::offload_get_num_devices
++                | sym::offload_sync
+                 | sym::return_address => {}
+                 _ => {
+                     span_bug!(
+diff --git a/compiler/rustc_hir_analysis/src/check/intrinsic.rs b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
+index ab74026db0c..3d7e81f0d99 100644
+--- a/compiler/rustc_hir_analysis/src/check/intrinsic.rs
++++ b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
+@@ -154,6 +154,7 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
+         | sym::non_exhaustive
+         | sym::offload
+         | sym::offload_get_num_devices
++        | sym::offload_sync
+         | sym::offload_preload
+         | sym::offload_preload_end
+         | sym::offset_of
+@@ -395,9 +396,8 @@ pub(crate) fn check_intrinsic_type(
+             param(2),
+         ),
+         sym::offload_get_num_devices => (0, 0, vec![], tcx.types.i32),
+-        sym::offload_preload | sym::offload_preload_end => {
+-            (1, 0, vec![param(0)], tcx.types.unit)
+-        }
++        sym::offload_preload | sym::offload_preload_end => (1, 0, vec![param(0)], tcx.types.unit),
++        sym::offload_sync => (0, 0, vec![], tcx.types.unit),
+         sym::offset => (2, 0, vec![param(0), param(1)], param(0)),
+         sym::arith_offset => (
+             1,
+diff --git a/compiler/rustc_span/src/symbol.rs b/compiler/rustc_span/src/symbol.rs
+index 21f1ea1b77c..8f1019c1020 100644
+--- a/compiler/rustc_span/src/symbol.rs
++++ b/compiler/rustc_span/src/symbol.rs
+@@ -1492,6 +1492,7 @@
+         off,
+         offload,
+         offload_get_num_devices,
++        offload_sync,
+         offload_preload,
+         offload_preload_end,
+         offload_kernel,
+@@ -1634,6 +1635,10 @@
+         prefetch_write_instruction,
+         prefix_nops,
+         preg,
++        preload,
++        preload_mut,
++        preload_type,
++        preload_mut_type,
+         prelude,
+         prelude_import,
+         preserves_flags,
+diff --git a/library/core/src/intrinsics/mod.rs b/library/core/src/intrinsics/mod.rs
+index eb4d463c396..fa76bfa170e 100644
+--- a/library/core/src/intrinsics/mod.rs
++++ b/library/core/src/intrinsics/mod.rs
+@@ -3833,6 +3833,11 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
+ #[rustc_nounwind]
+ pub fn offload_preload<P>(ptr: P);
+ 
++/// Waits for previously submitted offload operations to complete.
++#[rustc_intrinsic]
++#[rustc_nounwind]
++pub fn offload_sync();
++
+ #[rustc_intrinsic]
+ #[rustc_nounwind]
+ pub fn offload_preload_end<P>(ptr: P);
+diff --git a/library/core/src/offload/mod.rs b/library/core/src/offload/mod.rs
+index 8e095490bc2..8b6fd1d8f12 100644
+--- a/library/core/src/offload/mod.rs
++++ b/library/core/src/offload/mod.rs
+@@ -346,13 +346,25 @@ impl<T: ?Sized> DefaultLaunchCheck for &T {
+ // while the data is on the gpu. Dropping this struct will inform the runtime that this pointer can
+ // no longer be used to access the gpu copy of the data. If the reference counter reaches zero, the
+ // runtime might delete the gpu copy of the preloaded value.
++#[lang = "preload_type"]
+ #[unstable(feature = "offload", issue = "124509")]
+-#[derive(Debug)]
+ pub struct Preload<'a, T: ?Sized> {
+-    cpu_ptr: *const T,
++    pub cpu_ptr: *const T,
+     _marker: PhantomData<&'a T>,
+ }
+ 
++/// Waits until all previously submitted offload kernels on the current
++/// host thread have completed.
++///
++/// This does not copy preloaded values back to the host and does not release
++/// their device mappings. Those operations still occur when the corresponding
++/// [`Preload`] or [`PreloadMut`] guard is dropped.
++#[inline(always)]
++#[unstable(feature = "offload", issue = "124509")]
++pub fn offload_sync() {
++    crate::intrinsics::offload_sync();
++}
++
+ // We store a raw pointer instead of a reference, since the real location of the data will be on a
+ // GPU, at a different address. We only use the CPU pointer as a key to our runtime cpu-gpu pointer
+ // map. In the future we might even directly store the gpu ptr here, which would make it even
+@@ -360,13 +372,14 @@ pub struct Preload<'a, T: ?Sized> {
+ // We still use a lifetime marker to prevent writes into the original cpu version of the object,
+ // while the data is on the gpu. Dropping this struct will force a copy of the data back from the
+ // gpu to the cpu, after which we can again safely use the original mutable reference.
++#[lang = "preload_mut_type"]
+ #[unstable(feature = "offload", issue = "124509")]
+-#[derive(Debug)]
+ pub struct PreloadMut<'a, T: ?Sized> {
+-    cpu_ptr: *mut T,
++    pub cpu_ptr: *mut T,
+     _marker: PhantomData<&'a mut T>,
+ }
+ 
++#[lang = "preload"]
+ #[unstable(feature = "offload", issue = "124509")]
+ pub fn preload<'a, T: ?Sized>(x: &'a T) -> Preload<'a, T> {
+     let p = Preload { cpu_ptr: x as *const T, _marker: PhantomData };
+@@ -376,6 +389,7 @@ pub fn preload<'a, T: ?Sized>(x: &'a T) -> Preload<'a, T> {
+     p
+ }
+ 
++#[lang = "preload_mut"]
+ #[unstable(feature = "offload", issue = "124509")]
+ pub fn preload_mut<'a, T: ?Sized>(x: &'a mut T) -> PreloadMut<'a, T> {
+     let p = PreloadMut { cpu_ptr: x as *mut T, _marker: PhantomData };
+-- 
+2.43.0
+
