@@ -1,0 +1,31 @@
+From 687b543fc98376a76571c2243175fd8142030d6a Mon Sep 17 00:00:00 2001
+From: Manuel Drehwald <git@manuel.drehwald.info>
+Date: Thu, 8 Oct 2026 12:25:31 -0400
+Subject: [PATCH 1/9] bench: keep ScalarPair kernel args as Pair in the amdgpu
+ gpu-kernel ABI
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ compiler/rustc_target/src/callconv/amdgpu.rs | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/compiler/rustc_target/src/callconv/amdgpu.rs b/compiler/rustc_target/src/callconv/amdgpu.rs
+index 7a9eeaba19c..8e92d995465 100644
+--- a/compiler/rustc_target/src/callconv/amdgpu.rs
++++ b/compiler/rustc_target/src/callconv/amdgpu.rs
+@@ -70,7 +70,11 @@ pub(crate) fn compute_abi_info<'a, Ty, C>(cx: &C, fn_abi: &mut FnAbi<'a, Ty>)
+             continue;
+         }
+         if fn_abi.conv == CanonAbi::GpuKernel {
+-            if arg.layout.is_aggregate() {
++            // Bench-only workaround: the rustc offload host side (`OffloadMetadata::handle_abi`)
++            // still packs `ScalarPair` kernel args (slices, `{ptr, len}` structs) as two scalar
++            // kernargs, so keep `PassMode::Pair` here instead of the byref path, like nvptx does.
++            let is_scalar_pair = matches!(arg.layout.backend_repr, BackendRepr::ScalarPair { .. });
++            if arg.layout.is_aggregate() && !is_scalar_pair {
+                 if let Some(uniform) = single_element_struct_to_reg(cx, arg.layout) {
+                     // Single element structs are passed directly as the inner type
+                     arg.cast_to(uniform);
+-- 
+2.43.0
+

@@ -5,25 +5,16 @@ const DEFAULT_REPS: u32 = 1;
 
 const EA_MAT: usize = MEA_D1D * MEA_D1D * MEA_D1D * MEA_D1D * MEA_D1D * MEA_D1D;
 
+#[cfg(target_arch = "amdgpu")]
+use core::arch::amdgpu::{
+    _syncthreads, workgroup_id_x as block_idx_x, workitem_id_x as thread_idx_x,
+    workitem_id_y as thread_idx_y, workitem_id_z as thread_idx_z,
+};
 #[cfg(target_arch = "nvptx64")]
 use core::arch::nvptx::{
     _block_idx_x as block_idx_x, _syncthreads, _thread_idx_x as thread_idx_x,
     _thread_idx_y as thread_idx_y, _thread_idx_z as thread_idx_z,
 };
-#[cfg(target_arch = "amdgpu")]
-#[allow(improper_ctypes)]
-unsafe extern "C" {
-    #[link_name = "llvm.amdgcn.workgroup.id.x"]
-    fn block_idx_x() -> i32;
-    #[link_name = "llvm.amdgcn.workitem.id.x"]
-    fn thread_idx_x() -> i32;
-    #[link_name = "llvm.amdgcn.workitem.id.y"]
-    fn thread_idx_y() -> i32;
-    #[link_name = "llvm.amdgcn.workitem.id.z"]
-    fn thread_idx_z() -> i32;
-    #[link_name = "llvm.amdgcn.s.barrier"]
-    fn _syncthreads();
-}
 
 #[cfg(target_os = "linux")]
 use crate::common::data_utils::{alloc_and_init_data_const, calc_checksum, free};

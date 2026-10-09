@@ -1,0 +1,5 @@
+Kernels run without MPI
+Kernel        , Variant    , Tuning       ,    Problem size , Checksum   ,    Mean time per rep (sec.) ,    Mean Bandwidth (GiB per sec.) ,    Mean flops (gigaFLOP per sec.)
+Apps_LTIMES   , Base_HIP   , block_256    ,          999424 , PASSED     ,                 0.000275111 ,                          48.2556 ,                           181.640
+Apps_LTIMES   , RAJA_HIP   , kernel_256   ,          999424 , PASSED     ,                 0.000322688 ,                          41.1407 ,                           154.859
+Apps_LTIMES   , RAJA_HIP   , launch_256   ,          999424 , PASSED     ,                 0.000272239 ,                          48.7646 ,                           183.556
