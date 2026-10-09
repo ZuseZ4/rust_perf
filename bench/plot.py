@@ -28,8 +28,12 @@ INK, INK2, GRID = "#0b0b0b", "#52514e", "#e6e5e1"
 def read_raja(d, api):
     """kernel -> {'base': s, 'raja': s}; the -ltimes file carries the RAJA tunings."""
     out = {}
-    for name in ("RAJAPerf-timing-Average.csv", "RAJAPerf-timing-Average-ltimes.csv"):
-        f = d / name
+    # prefer the 10-pass minimum (p10/) over the first 3-pass average; the latter carries the
+    # cold first pass since RAJAPerf has no per-kernel warm-up
+    files = [d / "p10" / "RAJAPerf-timing-Minimum.csv"]
+    if not files[0].exists():
+        files = [d / "RAJAPerf-timing-Average.csv", d / "RAJAPerf-timing-Average-ltimes.csv"]
+    for f in files:
         if not f.exists():
             continue
         rows = [[c.strip() for c in l.split(",")] for l in f.read_text().splitlines()]
@@ -104,7 +108,7 @@ for ax, (gpu, label, api) in zip(axes, GPUS):
     ax.set_title(label, fontsize=10, color=INK, loc="left")
     ax.set_ylabel("total time over all reps (ms)", fontsize=8, color=INK2)
 axes[0].legend(frameon=False, fontsize=8, labelcolor=INK2)
-fig.suptitle(f"rust_perf vs RAJAPerf, {ROUND} (lower is better)", fontsize=11, color=INK, x=0.01, ha="left")
+fig.suptitle(f"rust_perf vs RAJAPerf (min of 10 passes), {ROUND} (lower is better)", fontsize=11, color=INK, x=0.01, ha="left")
 fig.tight_layout()
 out = BENCH / ROUND
 out.mkdir(exist_ok=True)
@@ -137,7 +141,8 @@ fig.savefig(out / "speedup.png")
 
 # --- summary table
 lines = [f"# rust_perf vs RAJAPerf, {ROUND}", "",
-         "Total seconds over all reps; ratio = Rust / RAJAPerf Base (1.0 = parity, lower is better).", ""]
+         "Total seconds over all reps; ratio = Rust / RAJAPerf Base (1.0 = parity, lower is better).",
+         "RAJAPerf: minimum over 10 passes (`p10/`) when present, else the 3-pass average. Rust: one run after 50 warm-up iterations.", ""]
 for gpu, label, api in GPUS:
     dd = data[gpu]
     lines += [f"## {label}", "", f"| kernel | Base_{api} | RAJA_{api} | Rust sync | Rust async | async/Base | sync/Base |",
