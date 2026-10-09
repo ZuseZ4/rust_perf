@@ -1,0 +1,185 @@
+% MI250X, LLVM 23 bench toolchain 2026-10: RustOffload = async launches with the libomptarget kernarg-reuse and
+% barrier-bit patches; RustOffloadNaive carried over from the
+% earlier round (interface A, transfer per launch; not reproducible with the current toolchain).
+\pgfplotstableread[row sep=newline, col sep=space]{
+App RustOffloadNaive RustOffload
+DEL_DOT_VEC_2D           0.333227  0.005690
+ENERGY                   0.217053  0.028590
+FIR                      2.456091  0.004457
+LTIMES                   0.053783  0.005521
+MATVEC_3D_STENCIL        0.969724  0.017520
+PRESSURE                 2.261837  0.036869
+VOL3D                    0.267186  0.004787
+avg                      0.936986  0.014776
+}\rustdatatioga
+
+% RAJAPerf 2026-10 build (ROCm 7.2.1), --ltimes_num_d 64; BaseHip/RajaHip = minimum of 10 passes, BaseSeq = 3-pass average
+\pgfplotstableread[row sep=newline, col sep=space]{
+BaseSeq BaseHip RajaHip
+0.888556    0.005576   0.005591
+0.987914    0.024818   0.024866
+1.015155    0.006226   0.006222
+0.772531    0.013561   0.013587
+2.112768    0.016997   0.017639
+1.081419    0.030142   0.030457
+0.633759    0.006214   0.006028
+1.070300    0.014791   0.014913
+}\rajadatatioga
+%last row is avg
+
+% H100, LLVM 23 bench toolchain 2026-10: RustOffload = async launches
+\pgfplotstableread[row sep=newline, col sep=space]{
+App RustOffload
+DEL_DOT_VEC_2D           0.002178
+ENERGY                   0.009908
+FIR                      0.001870
+LTIMES                   0.005392
+MATVEC_3D_STENCIL        0.006038
+PRESSURE                 0.011951
+VOL3D                    0.001903
+avg                      0.005606
+}\rustdatamatrix
+
+% RAJAPerf 2026-10 build (CUDA 12.9), --ltimes_num_d 64; BaseCUDA/RajaCUDA = minimum of 10 passes, BaseSeq = 3-pass average
+\pgfplotstableread[row sep=newline, col sep=comma]{
+BaseSeq,BaseCUDA,RajaCUDA 
+0.630909  ,  0.002049 ,  0.002047
+1.128837  ,  0.009768 ,  0.009771
+0.598789  ,  0.001263 ,  0.001253
+0.381421  ,  0.006099 ,  0.006110
+1.238102  ,  0.006113 ,  0.005391
+1.379343  ,  0.012642 ,  0.013069
+0.409620  ,  0.001779 ,  0.001677
+0.823860  ,  0.005673 ,  0.005617
+}\rajadatamatrix
+% last row is avg
+
+
+
+% Kernel Tiems start
+\pgfplotstableread[row sep=newline, col sep=space]{
+Total-Time(ns)  Instances  Avg(ns)  Med(ns)   Min(ns)  Max(ns)  StdDev(ns)       Name
+10,639,046     100  106,390.5  106,384.5  106,304  106,688  54.3  ltimes
+8,543,109     150  56,954.1  56,928.0  55,552  58,240  638.9  matvec3d
+5,996,516     750  7,995.4  7,968.0  7,616  8,928  212.8  pressurecalc2
+4,103,682     750  5,471.6  5,440.0  5,248  6,400  168.2  pressurecalc1
+3,648,290     180  20,268.3  20,032.0  19,776  21,408  454.4  energycalc5
+2,970,114     150  19,800.8  19,712.0  17,280  20,960  420.4  deldotvec2d
+2,863,681     180  15,909.3  15,648.0  15,328  17,024  546.8  energycalc3
+2,663,777     150  17,758.5  17,728.0  15,392  18,592  337.9  vol3d
+2,582,565     180  14,347.6  14,176.0  13,984  15,552  406.0  energycalc1
+2,201,250     210  10,482.1  10,464.0  10,400  11,200  66.8  fir
+1,182,624     180  6,570.1  6,560.0  6,336  6,816  91.5  energycalc4
+899,968     180  4,999.8  4,992.0  4,864  5,376  82.3  energycalc2
+783,104     180  4,350.6  4,352.0  4,288  4,576  54.4  energycalc6
+}\profilingRustMatrix
+
+\pgfplotstableread[row sep=newline, col sep=space]{
+Total-Time(ns)  Instances  Avg(ns)  Med(ns)   Min(ns)  Max(ns)  StdDev(ns)       Name
+6,719,300     700  9,599.0  9,600.0  9,120  10,496  195.1  pressurecalc2
+6,046,499      50  120,930.0  120,928.0  120,768  121,408  90.6  ltimes
+5,971,426     100  59,714.3  59,856.0  58,144  60,864  594.9  matvec3d
+3,857,219     700  5,510.3  5,472.0  5,216  6,272  145.2  pressurecalc1
+2,666,338     130  20,510.3  20,352.0  20,096  21,632  435.2  energycalc5
+2,051,426     130  15,780.2  15,648.0  15,264  17,088  437.1  energycalc3
+1,897,665     100  18,976.7  18,848.0  17,312  20,128  441.2  deldotvec2d
+1,873,312     130  14,410.1  14,304.0  14,112  15,680  348.9  energycalc1
+1,670,209     100  16,702.1  16,640.0  15,136  17,600  293.8  vol3d
+1,109,825     160  6,936.4  6,912.0  6,848  7,648  75.3  fir
+839,553     130  6,458.1  6,432.0  6,176  7,136  172.1  energycalc4
+624,000     130  4,800.0  4,768.0  4,608  5,728  167.9  energycalc2
+545,952     130  4,199.6  4,128.0  4,096  5,344  218.8  energycalc6
+}\profilingRajaMatrix
+
+\pgfplotstableread[row sep=newline, col sep=comma]{
+"Name","Calls","TotalDurationNs","AverageNs","Percentage"
+"matvec3d",150,25922087,172814,19.71
+"pressurecalc2",750,23439992,31253,17.82
+"pressurecalc1",750,13674808,18233,10.4
+"ltimes",100,10807107,108071,8.22
+"energycalc5",180,10517336,58430,8.0
+"energycalc3",180,9253809,51410,7.04
+"deldotvec2d",150,8152031,54347,6.2
+"energycalc1",180,7995239,44418,6.08
+"vol3d",150,6766125,45108,5.15
+"fir",210,5443555,25922,4.14
+"energycalc4",180,4305461,23919,3.27
+"energycalc2",180,3244018,18022,2.47
+"energycalc6",180,1982573,11014,1.51
+"avg",256.9230769230769,10115703.153846154,50996.998498,7.693076923076924
+}\profilingRustTioga
+
+\pgfplotstableread[row sep=newline, col sep=comma]{
+"Name","Calls","TotalDurationNs","AverageNs","Percentage"
+pressurecalc2,700,20758714,29655,20.05
+matvec3d,100,16948133,169481,16.37
+ltimes,50,13546981,270940,13.09
+pressurecalc1,700,9415108,13450,9.1
+energycalc5,130,7585176,58348,7.33
+energycalc3,130,6496046,49970,6.28
+fir,160,6215886,38849,6.0
+vol3d,100,6198766,61988,5.99
+deldotvec2d,100,5555400,55554,5.37
+energycalc1,130,5210119,40078,5.03
+energycalc4,130,2581139,19855,2.49
+energycalc2,130,1763693,13567,1.7
+energycalc6,130,1207529,9289,1.17
+avg,206.92307692307693,7960206.923076923,63924.8275,7.6899999999999995
+}\profilingRajaTioga
+
+
+%Total Kernel times start
+\pgfplotstableread[row sep=newline, col sep=comma]{
+Benchmark,RajaNs,RustNs,Speedup
+pressurecalc2,9599.0,7995.4,1.2005653250619106
+matvec3d,59714.3,56954.1,1.048463587344897
+pressurecalc1,5510.3,5471.6,1.0070728854448425
+ltimes,120930.0,106390.5,1.136661638022192
+energycalc5,20510.3,20268.3,1.0119398272178723
+energycalc3,15780.2,15909.3,0.9918852495081494
+deldotvec2d,18976.7,19800.8,0.9583804694759809
+energycalc1,14410.1,14347.6,1.0043561292480971
+vol3d,16702.1,17758.5,0.9405129937776275
+fir,6936.4,10482.1,0.6617376289102374
+energycalc4,6458.1,6570.1,0.9829530752956576
+energycalc2,4800.0,4999.8,0.9600384015360615
+energycalc6,4199.6,4350.6,0.9652921436123753
+avg,23425.1615,22407.5923,0.9899891811
+}\profilingKernelTimeMatrix
+
+\pgfplotstableread[row sep=newline, col sep=comma]{
+Benchmark,RajaNs,RustNs,Speedup
+pressurecalc2,29655.3,31253.3,0.9488688940364306
+matvec3d,169481.3,172813.9,0.9807157695307879
+pressurecalc1,13450.2,18233.1,0.7376787823773774
+ltimes,270939.6,108071.1,2.507050406736974
+energycalc5,58347.5,58429.6,0.9985942623341013
+energycalc3,49969.6,51410.1,0.9719808600652985
+deldotvec2d,55554.0,54346.9,1.0222115200556905
+energycalc1,40077.8,44418.0,0.9022883397522179
+vol3d,61987.7,45107.5,1.3742206950063738
+fir,38849.3,25921.7,1.4987173593469614
+energycalc4,19854.9,23919.2,0.8300817889807379
+energycalc2,13566.9,18022.3,0.7527814153960032
+energycalc6,9288.7,11014.3,0.8433299710867981
+avg,63924.8275,50996.9985,1.1052707742
+}\profilingTioga
+
+% RTX A2000 (UofT): not re-measured in this round, carried over
+\pgfplotstableread[row sep=newline, col sep=comma]{
+Benchmark,RustNs,RustAlgebraicNs,BaseCUDANs,RAJACUDANs,Speedup
+pressurecalc2,124869.0,124772.1,125322.8,124372.0,
+matvec3d,740781.9,671459.0,643838.0,566294.3,
+pressurecalc1,64543.6,64283.5,63612.3,64082.2,
+ltimes,786712.3,570984.6,397597.8,406900.8,
+energycalc5,261171.1,248742.2,251317.5,251285.5,
+energycalc3,218042.0,217393.4,217404.1,217338.9,
+deldotvec2d,1252695.8,1028520.5,1110918.8,1023101.3,
+energycalc1,181135.8,180655.3,180708.5,180684.4,
+vol3d,959662.5,701820.0,737184.2,758056.1,
+fir,387479.9,173078.7,196399.9,197350.6,
+energycalc4,93215.3,93450.6,93465.3,93470.9,
+energycalc2,62116.0,62170.9,62249.6,62424.1,
+energycalc6,34537.7,34789.3,34509.5,34568.4,
+avg,397458.6846,320932.3154,316502.1769,306148.4231,
+}\profilingKernelTimeUofT
