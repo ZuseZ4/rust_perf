@@ -20,17 +20,36 @@ avg                      0.016856  0.014924
 % VOL3D                    0.774
 
 \pgfplotstableread[row sep=newline, col sep=space]{
-BaseHip RajaHip
-0.005576    0.005591
-0.024818    0.024866
-0.006226    0.006222
-0.013561    0.013587
-0.016997    0.017639
-0.030142    0.030457
-0.006214    0.006028
-0.014791    0.014913
+BaseSeq BaseHip RajaHip
+0.888556    0.005576    0.005591
+0.987914    0.024818    0.024866
+1.015155    0.006226    0.006222
+0.772531    0.013561    0.013587
+2.112768    0.016997    0.017639
+1.081419    0.030142    0.030457
+0.633759    0.006214    0.006028
+1.070300    0.014791    0.014913
 }\rajadatatioga
-%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64
+%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64; BaseSeq is the 3-pass average
+
+\pgfplotstableread[row sep=newline, col sep=comma]{
+Benchmark,RajaNs,RustNs,Speedup
+ltimes,270939.6,108071.1,2.5071
+matvec3dstencil,169481.3,172813.9,0.9807
+vol3d,61987.7,45107.5,1.3742
+energycalc5,58347.5,58429.6,0.9986
+deldotvec2d,55554.0,54346.9,1.0222
+energycalc3,49969.6,51410.1,0.9720
+energycalc1,40077.8,44418.0,0.9023
+fir,38849.3,25921.7,1.4987
+pressurecalc2,29655.3,31253.3,0.9489
+energycalc4,19854.9,23919.2,0.8301
+energycalc2,13566.9,18022.3,0.7528
+pressurecalc1,13450.2,18233.1,0.7377
+energycalc6,9288.7,11014.3,0.8433
+avg,63924.8,50997.0,1.1053
+}\profilingKernelTimeTioga
+% average GPU time per kernel launch (ns), rocprofv3/nsys kernel stats; Speedup = Raja/Rust (>1: Rust faster)
 
 % matrix: RAJAPerf min of 10 passes; Rust async from rust-async.txt, sync from rust-sync.txt
 \pgfplotstableread[row sep=newline, col sep=space]{
@@ -64,5 +83,5 @@ BaseCuda RajaCuda
 0.001779    0.001677
 0.005673    0.005617
 }\rajadatamatrix
-%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64
+%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64; no Base_Seq run yet
 
