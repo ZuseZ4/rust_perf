@@ -1,23 +1,23 @@
-% tioga: RAJAPerf min of 10 passes; Rust async from rust-async.txt, sync from rust-sync.txt
+% tioga: RAJAPerf min of 10 passes; Rust async from rust-async-barrier.txt, sync from rust-sync.txt
 \pgfplotstableread[row sep=newline, col sep=space]{
 App RustOffloadSync RustOffload
-DEL_DOT_VEC_2D           0.006269  0.006228
-ENERGY                   0.032574  0.032709
-FIR                      0.005300  0.005400
-LTIMES                   0.006136  0.006238
-MATVEC_3D_STENCIL        0.018644  0.018051
-PRESSURE                 0.043854  0.046669
-VOL3D                    0.005216  0.005285
-avg                      0.016856  0.017226
+DEL_DOT_VEC_2D           0.006269  0.005714
+ENERGY                   0.032574  0.028799
+FIR                      0.005300  0.004587
+LTIMES                   0.006136  0.005915
+MATVEC_3D_STENCIL        0.018644  0.017633
+PRESSURE                 0.043854  0.037005
+VOL3D                    0.005216  0.004812
+avg                      0.016856  0.014924
 }\rustdatatioga
 % rust (async) slowdown over BaseHip
-% DEL_DOT_VEC_2D           1.117
-% ENERGY                   1.318
-% FIR                      0.867
-% LTIMES                   0.460
-% MATVEC_3D_STENCIL        1.062
-% PRESSURE                 1.548
-% VOL3D                    0.850
+% DEL_DOT_VEC_2D           1.025
+% ENERGY                   1.160
+% FIR                      0.737
+% LTIMES                   0.436
+% MATVEC_3D_STENCIL        1.037
+% PRESSURE                 1.228
+% VOL3D                    0.774
 
 \pgfplotstableread[row sep=newline, col sep=space]{
 BaseHip RajaHip
