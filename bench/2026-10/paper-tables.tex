@@ -1,23 +1,23 @@
-% tioga: RAJAPerf min of 10 passes; Rust async from rust-async-barrier.txt, sync from rust-sync.txt
+% tioga: RAJAPerf min of 10 passes; Rust async from rust-async-fir-rt.txt, sync from rust-sync.txt
 \pgfplotstableread[row sep=newline, col sep=space]{
 App RustOffloadSync RustOffload
-DEL_DOT_VEC_2D           0.006269  0.005714
-ENERGY                   0.032574  0.028799
-FIR                      0.005300  0.004587
-LTIMES                   0.006136  0.005915
-MATVEC_3D_STENCIL        0.018644  0.017633
-PRESSURE                 0.043854  0.037005
-VOL3D                    0.005216  0.004812
-avg                      0.016856  0.014924
+DEL_DOT_VEC_2D           0.006269  0.005690
+ENERGY                   0.032574  0.028590
+FIR                      0.005300  0.004457
+LTIMES                   0.006136  0.005521
+MATVEC_3D_STENCIL        0.018644  0.017520
+PRESSURE                 0.043854  0.036869
+VOL3D                    0.005216  0.004787
+avg                      0.016856  0.014776
 }\rustdatatioga
 % rust (async) slowdown over BaseHip
-% DEL_DOT_VEC_2D           1.025
-% ENERGY                   1.160
-% FIR                      0.737
-% LTIMES                   0.436
-% MATVEC_3D_STENCIL        1.037
-% PRESSURE                 1.228
-% VOL3D                    0.774
+% DEL_DOT_VEC_2D           1.020
+% ENERGY                   1.152
+% FIR                      0.716
+% LTIMES                   0.407
+% MATVEC_3D_STENCIL        1.031
+% PRESSURE                 1.223
+% VOL3D                    0.770
 
 \pgfplotstableread[row sep=newline, col sep=space]{
 BaseSeq BaseHip RajaHip
@@ -51,37 +51,56 @@ avg,63924.8,50997.0,1.1053
 }\profilingKernelTimeTioga
 % average GPU time per kernel launch (ns), rocprofv3/nsys kernel stats; Speedup = Raja/Rust (>1: Rust faster)
 
-% matrix: RAJAPerf min of 10 passes; Rust async from rust-async.txt, sync from rust-sync.txt
+% matrix: RAJAPerf min of 10 passes; Rust async from rust-async-fir-rt.txt, sync from rust-sync.txt
 \pgfplotstableread[row sep=newline, col sep=space]{
 App RustOffloadSync RustOffload
-DEL_DOT_VEC_2D           0.005171  0.002189
-ENERGY                   0.013718  0.009817
-FIR                      0.006589  0.001846
-LTIMES                   0.006862  0.005402
-MATVEC_3D_STENCIL        0.009385  0.005902
-PRESSURE                 0.030985  0.011662
-VOL3D                    0.004798  0.001893
-avg                      0.011073  0.005530
+DEL_DOT_VEC_2D           0.005171  0.002178
+ENERGY                   0.013718  0.009908
+FIR                      0.006589  0.001870
+LTIMES                   0.006862  0.005392
+MATVEC_3D_STENCIL        0.009385  0.006038
+PRESSURE                 0.030985  0.011951
+VOL3D                    0.004798  0.001903
+avg                      0.011073  0.005606
 }\rustdatamatrix
 % rust (async) slowdown over BaseCuda
-% DEL_DOT_VEC_2D           1.068
-% ENERGY                   1.005
-% FIR                      1.462
-% LTIMES                   0.886
-% MATVEC_3D_STENCIL        0.965
-% PRESSURE                 0.922
-% VOL3D                    1.064
+% DEL_DOT_VEC_2D           1.063
+% ENERGY                   1.014
+% FIR                      1.481
+% LTIMES                   0.884
+% MATVEC_3D_STENCIL        0.988
+% PRESSURE                 0.945
+% VOL3D                    1.070
 
 \pgfplotstableread[row sep=newline, col sep=space]{
-BaseCuda RajaCuda
-0.002049    0.002047
-0.009768    0.009771
-0.001263    0.001253
-0.006099    0.006110
-0.006113    0.005391
-0.012642    0.013069
-0.001779    0.001677
-0.005673    0.005617
+BaseSeq BaseCuda RajaCuda
+0.630909    0.002049    0.002047
+1.128837    0.009768    0.009771
+0.598789    0.001263    0.001253
+0.381421    0.006099    0.006110
+1.238102    0.006113    0.005391
+1.379343    0.012642    0.013069
+0.409620    0.001779    0.001677
+0.823860    0.005673    0.005617
 }\rajadatamatrix
-%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64; no Base_Seq run yet
+%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64; BaseSeq is the 3-pass average
+
+\pgfplotstableread[row sep=newline, col sep=comma]{
+Benchmark,RajaNs,RustNs,Speedup
+ltimes,120930.0,106390.5,1.1367
+matvec3dstencil,59714.3,56954.1,1.0485
+energycalc5,20510.3,20268.3,1.0119
+deldotvec2d,18976.7,19800.8,0.9584
+vol3d,16702.1,17758.5,0.9405
+energycalc3,15780.2,15909.3,0.9919
+energycalc1,14410.1,14347.6,1.0044
+pressurecalc2,9599.0,7995.4,1.2006
+fir,6936.4,10482.1,0.6617
+energycalc4,6458.1,6570.1,0.9830
+pressurecalc1,5510.3,5471.6,1.0071
+energycalc2,4800.0,4999.8,0.9600
+energycalc6,4199.6,4350.6,0.9653
+avg,23425.2,22407.6,0.9900
+}\profilingKernelTimeMatrix
+% average GPU time per kernel launch (ns), rocprofv3/nsys kernel stats; Speedup = Raja/Rust (>1: Rust faster)
 

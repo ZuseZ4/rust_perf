@@ -86,7 +86,7 @@ def style(ax):
 data = {}
 for gpu, label, api in GPUS:
     d = BENCH / gpu / ROUND
-    async_f = d / "rust-async-barrier.txt" if (d / "rust-async-barrier.txt").exists() else d / "rust-async.txt"
+    async_f = next(f for f in (d / "rust-async-fir-rt.txt", d / "rust-async-barrier.txt", d / "rust-async.txt") if f.exists())
     data[gpu] = {"raja": read_raja(d, api), "sync": read_rust(d / "rust-sync.txt"), "async": read_rust(async_f),
                  "chk_raja": read_raja_checksums(d / "RAJAPerf-checksum.txt", api),
                  "chk_sync": read_rust(d / "rust-sync.txt", checksum=True),

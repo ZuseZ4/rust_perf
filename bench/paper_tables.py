@@ -104,9 +104,7 @@ lines = []
 for gpu, machine, api in GPUS:
     d = BENCH / gpu / ROUND
     raja = read_raja(d, api)
-    async_f = d / "rust-async-barrier.txt"
-    if not async_f.exists():
-        async_f = d / "rust-async.txt"
+    async_f = next(f for f in (d / "rust-async-fir-rt.txt", d / "rust-async-barrier.txt", d / "rust-async.txt") if f.exists())
     ra, rs = read_rust(async_f), read_rust(d / "rust-sync.txt")
     lines.append(f"% {machine}: RAJAPerf min of 10 passes; Rust async from {async_f.name}, sync from rust-sync.txt")
     lines.append(r"\pgfplotstableread[row sep=newline, col sep=space]{")
@@ -134,8 +132,9 @@ for gpu, machine, api in GPUS:
                  + ("; BaseSeq is the 3-pass average" if seq else "; no Base_Seq run yet"))
     lines.append("")
     # per-kernel GPU times (paper Fig. 2)
-    kr = read_kernel_stats(d / "analysis" / "kernels" / "rust.csv")
-    kj = read_kernel_stats(d / "analysis" / "kernels" / "raja.csv")
+    kdir = d / "analysis" / "kernels"
+    kr = read_kernel_stats(next(iter(sorted(kdir.glob("rust*.csv"))), kdir / "rust.csv"))
+    kj = read_kernel_stats(next(iter(sorted(kdir.glob("raja*.csv"))), kdir / "raja.csv"))
     if kr and kj:
         common = [k for k in sorted(kj, key=lambda k: -kj[k]) if k in kr]
         tag = machine.capitalize()
