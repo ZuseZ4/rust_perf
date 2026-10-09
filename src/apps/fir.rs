@@ -138,6 +138,7 @@ impl<'a> KernelBase for Fir<'a> {
                 m_out_reg.reborrow(),
                 m_in_ref,
                 coeff_ref,
+                COEFFLEN,
                 IEND,
             ),
         };
@@ -182,6 +183,9 @@ fn fir(
     mut m_out: Region<Real, Linear1D>,
     m_in: &[Real; INLEN],
     coeff: &[Real; COEFFLEN],
+    // Runtime trip count like RAJAPerf's `m_coefflen`, so the tap loop is not unrolled by a
+    // compile-time constant that the C++ version does not have.
+    coefflen: usize,
     iend: usize,
 ) {
     let i = Linear1D::index();
@@ -191,10 +195,7 @@ fn fir(
             let mut sum: Real = Real::from(0.0);
             let mut j = 0;
 
-            //#[unroll(2)]
-            //for j in 0..COEFFLEN {
-            //#[rustc_unroll(4)]
-            while j < COEFFLEN {
+            while j < coefflen {
                 unsafe {
                     sum += (*coeff)[j] * (*m_in)[i + j];
                 }
