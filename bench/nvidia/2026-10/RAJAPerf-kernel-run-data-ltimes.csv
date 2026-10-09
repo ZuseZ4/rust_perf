@@ -1,0 +1,5 @@
+Kernels run without MPI
+Kernel        , Variant     , Tuning       ,    Problem size , Checksum   ,    Mean time per rep (sec.) ,    Mean Bandwidth (GiB per sec.) ,    Mean flops (gigaFLOP per sec.)
+Apps_LTIMES   , Base_CUDA   , block_256    ,          999424 , PASSED     ,                 0.000125179 ,                          106.053 ,                           399.198
+Apps_LTIMES   , RAJA_CUDA   , kernel_256   ,          999424 , PASSED     ,                 0.000125442 ,                          105.830 ,                           398.359
+Apps_LTIMES   , RAJA_CUDA   , launch_256   ,          999424 , PASSED     ,                 0.000123299 ,                          107.671 ,                           405.286
