@@ -22,6 +22,12 @@ case "$GPU" in
   *) echo "unknown GPU $GPU" >&2; exit 1 ;;
 esac
 
+# Cargo does not know that the manifest feeds the device pass, so force the crate to rebuild and
+# drop stale device images: picking an old one (e.g. from a single-kernel build) links a host
+# binary whose kernels are missing from the image (HSA_STATUS_ERROR_INVALID_SYMBOL_NAME).
+touch src/lib.rs
+rm -f target/$TARGET/release/build/$CRATE/*/out/device.bin
+
 # 1) manifest of the kernel instantiations the host code needs. `cargo rustc -- ...` hands the
 #    offload flags to the final crate only: the manifest pass emits no artifacts, so std/libc and
 #    the build scripts would otherwise come out empty.
@@ -33,7 +39,11 @@ RUSTFLAGS="-Zunstable-options $DEV_FLAGS --emit=llvm-bc -Zoffload=Device=$MANIFE
 cargo +$TC build --lib -r --target $TARGET \
   -Zbuild-std=core,compiler_builtins,panic_abort -Zbuild-std-features=compiler-builtins-mem "${EXTRA[@]}"
 
-DEVICE_BIN=$(ls -t $PWD/target/$TARGET/release/build/$CRATE/*/out/device.bin | head -1)
+DEVICE_BINS=( $PWD/target/$TARGET/release/build/$CRATE/*/out/device.bin )
+if [ ${#DEVICE_BINS[@]} -ne 1 ] || [ ! -f "${DEVICE_BINS[0]}" ]; then
+  echo "expected exactly one fresh device image, found: ${DEVICE_BINS[*]}" >&2; exit 1
+fi
+DEVICE_BIN=${DEVICE_BINS[0]}
 echo "device image: $DEVICE_BIN"
 
 # 3) host code with the device image; rustc links -lomptarget -lomp itself
