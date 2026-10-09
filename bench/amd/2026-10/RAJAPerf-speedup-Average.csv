@@ -1,0 +1,10 @@
+Mean Speedup Report (T_ref/T_var): ref var = Base_HIP  ,  , 
+Variant                 , Base_HIP  , RAJA_HIP 
+Tuning                  , block_256 , block_256
+Apps_DEL_DOT_VEC_2D     ,     1.000 ,     1.042
+Apps_ENERGY             ,     1.000 ,     1.016
+Apps_FIR                ,     1.000 ,     1.001
+Apps_LTIMES             ,     1.000 ,   Not run
+Apps_MATVEC_3D_STENCIL  ,     1.000 ,     0.983
+Apps_PRESSURE           ,     1.000 ,     0.997
+Apps_VOL3D              ,     1.000 ,     1.081
