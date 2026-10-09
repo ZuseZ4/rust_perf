@@ -54,10 +54,15 @@ impl<'a> Executor<'a> {
 
             reset_data_init_count();
             kernel.setup();
-            //warmup
-            for _ in 0..50 {
+            // Warm-up runs the real kernel on the real data, so accumulating kernels (LTIMES)
+            // end up with a different checksum than RAJAPerf; RUST_PERF_WARMUP=0 disables it
+            // for checksum comparisons.
+            let warmup = unsafe {
+                let v = libc::getenv(c"RUST_PERF_WARMUP".as_ptr());
+                if v.is_null() { 50 } else { libc::atoi(v) }
+            };
+            for _ in 0..warmup {
                 kernel.run_kernel();
-                //offload_sync();
             }
             offload_sync();
 

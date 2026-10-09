@@ -25,3 +25,18 @@ Total seconds over all reps; ratio = Rust / RAJAPerf Base (1.0 = parity, lower i
 | MATVEC_3D_STENCIL | 0.01717 | 0.01747 | 0.01864 | 0.01805 | 1.05 | 1.09 |
 | PRESSURE | 0.03040 | 0.03051 | 0.04385 | 0.04667 | 1.53 | 1.44 |
 | VOL3D | 0.00653 | 0.00604 | 0.00522 | 0.00528 | 0.81 | 0.80 |
+
+## Verification: checksums vs RAJAPerf Base (same init sequence and checksum formula)
+
+| kernel | H100 rel. diff | MI250X (1 GCD) rel. diff |
+|---|---|---|
+| DEL_DOT_VEC_2D | 7.6e-12 | 7.6e-12 |
+| ENERGY | 4.8e-12 | 4.8e-12 |
+| FIR | 2.7e-13 | 2.7e-13 |
+| LTIMES | 1.0e+00 | 1.0e+00 |
+| MATVEC_3D_STENCIL | 8.2e-13 | 8.2e-13 |
+| PRESSURE | 4.8e-12 | 4.8e-12 |
+| VOL3D | 1.6e-11 | 1.6e-11 |
+
+Rust prints 6 decimals, so ~1e-11 is the comparison floor. LTIMES accumulates into `phi`, so the
+default 50 warm-up runs double its checksum; run with `RUST_PERF_WARMUP=0` to compare it.

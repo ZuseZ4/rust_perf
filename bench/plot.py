@@ -48,13 +48,24 @@ def read_raja(d, api):
     return out
 
 
-def read_rust(f):
-    """kernel -> total seconds (launch + sync) from the printed table."""
+def read_rust(f, checksum=False):
+    """kernel -> total seconds (launch + sync), or the checksum, from the printed table."""
     out = {}
     for l in f.read_text().splitlines():
-        m = re.match(r"^(\w+)\s+\d+\s+\d+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+[\d.]+\s*$", l)
+        m = re.match(r"^(\w+)\s+\d+\s+\d+\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*$", l)
         if m:
-            out[m.group(1)] = float(m.group(4))
+            out[m.group(1)] = float(m.group(5) if checksum else m.group(4))
+    return out
+
+
+def read_raja_checksums(f, api):
+    """kernel -> Base_<api> checksum from RAJAPerf-checksum.txt."""
+    out, kernel = {}, None
+    for l in f.read_text().splitlines():
+        if l.startswith("Apps_"):
+            kernel = l.split()[0].removeprefix("Apps_")
+        elif kernel and l.startswith(f"Base_{api}-"):
+            out[kernel] = float(l.split()[3])
     return out
 
 
@@ -71,7 +82,10 @@ def style(ax):
 data = {}
 for gpu, label, api in GPUS:
     d = BENCH / gpu / ROUND
-    data[gpu] = {"raja": read_raja(d, api), "sync": read_rust(d / "rust-sync.txt"), "async": read_rust(d / "rust-async.txt")}
+    data[gpu] = {"raja": read_raja(d, api), "sync": read_rust(d / "rust-sync.txt"), "async": read_rust(d / "rust-async.txt"),
+                 "chk_raja": read_raja_checksums(d / "RAJAPerf-checksum.txt", api),
+                 "chk_sync": read_rust(d / "rust-sync.txt", checksum=True),
+                 "chk_async": read_rust(d / "rust-async.txt", checksum=True)}
 
 series = [("base", "RAJAPerf Base"), ("raja", "RAJAPerf RAJA"), ("sync", "Rust sync"), ("async", "Rust async")]
 x = list(range(len(KERNELS)))
@@ -133,5 +147,20 @@ for gpu, label, api in GPUS:
         s, a = dd["sync"][k], dd["async"][k]
         lines.append(f"| {k} | {b:.5f} | {r:.5f} | {s:.5f} | {a:.5f} | {a / b:.2f} | {s / b:.2f} |")
     lines.append("")
+lines += ["## Verification: checksums vs RAJAPerf Base (same init sequence and checksum formula)", "",
+          "| kernel | " + " | ".join(f"{label} rel. diff" for _, label, _ in GPUS) + " |", "|---|" + "---|" * len(GPUS)]
+for k in KERNELS:
+    cells = []
+    for gpu, label, api in GPUS:
+        dd = data[gpu]
+        r = dd["chk_raja"].get(k)
+        a, b = dd["chk_sync"].get(k), dd["chk_async"].get(k)
+        if r is None or a is None:
+            cells.append("n/a")
+        else:
+            cells.append(f"{abs(a - r) / r:.1e}" + ("" if a == b else " (sync != async!)"))
+    lines.append(f"| {k} | " + " | ".join(cells) + " |")
+lines += ["", "Rust prints 6 decimals, so ~1e-11 is the comparison floor. LTIMES accumulates into `phi`, so the",
+          "default 50 warm-up runs double its checksum; run with `RUST_PERF_WARMUP=0` to compare it.", ""]
 (out / "summary.md").write_text("\n".join(lines))
 print("\n".join(lines))
