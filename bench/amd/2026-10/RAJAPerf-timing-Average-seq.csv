@@ -1,0 +1,10 @@
+Mean Runtime Report (sec.)  , 
+Variant                 , Base_Seq
+Tuning                  , default 
+Apps_DEL_DOT_VEC_2D     , 0.888556
+Apps_ENERGY             , 0.987914
+Apps_FIR                , 1.015155
+Apps_LTIMES             , 0.772531
+Apps_MATVEC_3D_STENCIL  , 2.112768
+Apps_PRESSURE           , 1.081419
+Apps_VOL3D              , 0.633759
