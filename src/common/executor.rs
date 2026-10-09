@@ -143,15 +143,17 @@ impl<'a> Executor<'a> {
             if fp.is_null() {
                 return;
             }
-            libc::fprintf(fp, c"Kernel,Reps,N,TotalTime,Checksum\n".as_ptr());
+            libc::fprintf(fp, c"Kernel,Reps,N,LaunchTime,SyncTime,TotalTime,Checksum\n".as_ptr());
             for r in results {
                 libc::fprintf(
                     fp,
-                    c"%s,%u,%zu,%.6f,%.6f\n".as_ptr(),
+                    c"%s,%u,%zu,%.6f,%.6f,%.6f,%.6f\n".as_ptr(),
                     r.name.as_bytes().as_ptr(),
                     r.reps as libc::c_uint,
                     r.problem_size as libc::size_t,
+                    r.launch_s,
                     r.total_s,
+                    r.total_s + r.launch_s,
                     r.checksum,
                 );
             }
