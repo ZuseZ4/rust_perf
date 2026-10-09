@@ -86,10 +86,11 @@ def style(ax):
 data = {}
 for gpu, label, api in GPUS:
     d = BENCH / gpu / ROUND
-    data[gpu] = {"raja": read_raja(d, api), "sync": read_rust(d / "rust-sync.txt"), "async": read_rust(d / "rust-async.txt"),
+    async_f = d / "rust-async-barrier.txt" if (d / "rust-async-barrier.txt").exists() else d / "rust-async.txt"
+    data[gpu] = {"raja": read_raja(d, api), "sync": read_rust(d / "rust-sync.txt"), "async": read_rust(async_f),
                  "chk_raja": read_raja_checksums(d / "RAJAPerf-checksum.txt", api),
                  "chk_sync": read_rust(d / "rust-sync.txt", checksum=True),
-                 "chk_async": read_rust(d / "rust-async.txt", checksum=True)}
+                 "chk_async": read_rust(async_f, checksum=True)}
 
 series = [("base", "RAJAPerf Base"), ("raja", "RAJAPerf RAJA"), ("sync", "Rust sync"), ("async", "Rust async")]
 x = list(range(len(KERNELS)))

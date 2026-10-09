@@ -1,0 +1,68 @@
+% tioga: RAJAPerf min of 10 passes; Rust async from rust-async.txt, sync from rust-sync.txt
+\pgfplotstableread[row sep=newline, col sep=space]{
+App RustOffloadSync RustOffload
+DEL_DOT_VEC_2D           0.006269  0.006228
+ENERGY                   0.032574  0.032709
+FIR                      0.005300  0.005400
+LTIMES                   0.006136  0.006238
+MATVEC_3D_STENCIL        0.018644  0.018051
+PRESSURE                 0.043854  0.046669
+VOL3D                    0.005216  0.005285
+avg                      0.016856  0.017226
+}\rustdatatioga
+% rust (async) slowdown over BaseHip
+% DEL_DOT_VEC_2D           1.117
+% ENERGY                   1.318
+% FIR                      0.867
+% LTIMES                   0.460
+% MATVEC_3D_STENCIL        1.062
+% PRESSURE                 1.548
+% VOL3D                    0.850
+
+\pgfplotstableread[row sep=newline, col sep=space]{
+BaseHip RajaHip
+0.005576    0.005591
+0.024818    0.024866
+0.006226    0.006222
+0.013561    0.013587
+0.016997    0.017639
+0.030142    0.030457
+0.006214    0.006028
+0.014791    0.014913
+}\rajadatatioga
+%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64
+
+% matrix: RAJAPerf min of 10 passes; Rust async from rust-async.txt, sync from rust-sync.txt
+\pgfplotstableread[row sep=newline, col sep=space]{
+App RustOffloadSync RustOffload
+DEL_DOT_VEC_2D           0.005171  0.002189
+ENERGY                   0.013718  0.009817
+FIR                      0.006589  0.001846
+LTIMES                   0.006862  0.005402
+MATVEC_3D_STENCIL        0.009385  0.005902
+PRESSURE                 0.030985  0.011662
+VOL3D                    0.004798  0.001893
+avg                      0.011073  0.005530
+}\rustdatamatrix
+% rust (async) slowdown over BaseCuda
+% DEL_DOT_VEC_2D           1.068
+% ENERGY                   1.005
+% FIR                      1.462
+% LTIMES                   0.886
+% MATVEC_3D_STENCIL        0.965
+% PRESSURE                 0.922
+% VOL3D                    1.064
+
+\pgfplotstableread[row sep=newline, col sep=space]{
+BaseCuda RajaCuda
+0.002049    0.002047
+0.009768    0.009771
+0.001263    0.001253
+0.006099    0.006110
+0.006113    0.005391
+0.012642    0.013069
+0.001779    0.001677
+0.005673    0.005617
+}\rajadatamatrix
+%last row is avg; LTIMES is the fastest RAJA tuning (launch_256); RAJAPerf run with --ltimes_num_d 64
+
