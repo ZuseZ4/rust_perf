@@ -175,8 +175,14 @@ impl<'a> KernelBase for LTimes<'a> {
             block_dim = [m_block as u32, g_block as u32, z_block as u32],
             args = (
                 phidat_reg.reborrow(),
+                #[cfg(not(feature = "ltimes_rawptr"))]
                 elldat_ref,
+                #[cfg(feature = "ltimes_rawptr")]
+                (elldat_ref as *const [Real; ELLLEN]),
+                #[cfg(not(feature = "ltimes_rawptr"))]
                 psidat_ref,
+                #[cfg(feature = "ltimes_rawptr")]
+                (psidat_ref as *const [Real; PSILEN]),
                 NUM_D,
                 NUM_M,
                 NUM_G,
@@ -226,6 +232,9 @@ impl<'a> KernelBase for LTimes<'a> {
 #[cfg(not(target_os = "linux"))]
 use crate::common::types::Real;
 
+// `ltimes_rawptr`: experiment variant taking the inputs as raw pointers, which drops the
+// `noalias readonly` the reference parameters carry into the kernel's IR.
+#[cfg(not(feature = "ltimes_rawptr"))]
 #[offload_kernel]
 fn ltimes(
     mut phi: Region<Real, Stride3D<32, 8, 1, 25, 32>>,
@@ -249,6 +258,36 @@ fn ltimes(
 
                 unsafe {
                     *v += *ell.get_unchecked(ell_idx) * *psi.get_unchecked(psi_idx);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "ltimes_rawptr")]
+#[offload_kernel]
+fn ltimes(
+    mut phi: Region<Real, Stride3D<32, 8, 1, 25, 32>>,
+    ell: *const [Real; ELLLEN],
+    psi: *const [Real; PSILEN],
+    num_d: usize,
+    num_m: usize,
+    num_g: usize,
+    num_z: usize,
+) {
+    let m = unsafe { (block_idx_x() * 32 + thread_idx_x()) as usize };
+    let g = unsafe { (block_idx_y() * 8 + thread_idx_y()) as usize };
+    let z = unsafe { (block_idx_z() * 1 + thread_idx_z()) as usize };
+
+    if m < num_m && g < num_g && z < num_z {
+        if let Some(v) = phi.get_mut() {
+            //#[rustc_unroll(8)]
+            for d in 0..num_d {
+                let ell_idx = d + num_d * m;
+                let psi_idx = d + num_d * (g + num_g * z);
+
+                unsafe {
+                    *v += *(*ell).get_unchecked(ell_idx) * *(*psi).get_unchecked(psi_idx);
                 }
             }
         }
