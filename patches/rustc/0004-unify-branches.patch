@@ -1,26 +1,27 @@
-From 81ebd6cc31f1832e9f0dd9cf6e2e8050b36bc7c2 Mon Sep 17 00:00:00 2001
+From edc8233e21bfb38f4fee87dc3fa00346f51a2948 Mon Sep 17 00:00:00 2001
 From: Manuel Drehwald <git@manuel.drehwald.info>
 Date: Tue, 15 Sep 2026 20:21:19 -0400
-Subject: [PATCH 8/9] unify branches
+Subject: [PATCH 4/5] unify branches
 
+(cherry picked from commit 81ebd6cc31f1832e9f0dd9cf6e2e8050b36bc7c2)
 ---
  compiler/rustc_codegen_llvm/src/intrinsic.rs | 112 ++++---------------
  1 file changed, 24 insertions(+), 88 deletions(-)
 
 diff --git a/compiler/rustc_codegen_llvm/src/intrinsic.rs b/compiler/rustc_codegen_llvm/src/intrinsic.rs
-index 7866575d411..4dafc8d62dd 100644
+index 31aef1b1a61..ed09b806179 100644
 --- a/compiler/rustc_codegen_llvm/src/intrinsic.rs
 +++ b/compiler/rustc_codegen_llvm/src/intrinsic.rs
 @@ -21,7 +21,7 @@
- use rustc_middle::mir::BinOp;
- use rustc_middle::ty::consts::ConstExt;
+ use rustc_middle::mir::interpret::{AllocId, Allocation, ErrorHandled, GlobalAlloc, alloc_range};
+ use rustc_middle::mir::{self, BinOp};
  use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, HasTypingEnv, LayoutOf};
 -use rustc_middle::ty::offload_meta::OffloadMetadata;
 +use rustc_middle::ty::offload_meta::{OffloadMetadata, MappingFlags};
  use rustc_middle::ty::{self, GenericArgsRef, Instance, SimdAlign, Ty, TyCtxt, TypingEnv};
  use rustc_session::diagnostics::feature_err;
  use rustc_span::{ErrorGuaranteed, Span, Symbol, bug, span_bug, sym};
-@@ -235,12 +235,12 @@ fn codegen_intrinsic_call(
+@@ -232,12 +232,12 @@ fn codegen_intrinsic_call(
              }
  
              sym::offload_preload => {
@@ -35,7 +36,7 @@ index 7866575d411..4dafc8d62dd 100644
                  return IntrinsicResult::WroteIntoPlace;
              }
              sym::offload => {
-@@ -1932,77 +1932,7 @@ fn codegen_autodiff<'ll, 'tcx>(
+@@ -1926,77 +1926,7 @@ fn codegen_autodiff<'ll, 'tcx>(
      )
  }
  
@@ -114,7 +115,7 @@ index 7866575d411..4dafc8d62dd 100644
  // For now, we only handle the data transfer part of it. Consecutive calls become a no-op on the
  // LLVM side.
  //
-@@ -2020,25 +1950,25 @@ fn codegen_offload_preload_drop<'ll, 'tcx>(
+@@ -2014,25 +1944,25 @@ fn codegen_offload_preload_drop<'ll, 'tcx>(
  fn codegen_offload_preload<'ll, 'tcx>(
      bx: &mut Builder<'_, 'll, 'tcx>,
      tcx: TyCtxt<'tcx>,
@@ -151,7 +152,7 @@ index 7866575d411..4dafc8d62dd 100644
      let metadata = &[meta];
      let types = cx.layout_of(pointee_ty).llvm_type(cx);
  
-@@ -2050,9 +1980,16 @@ fn codegen_offload_preload<'ll, 'tcx>(
+@@ -2044,9 +1974,16 @@ fn codegen_offload_preload<'ll, 'tcx>(
              return;
          }
      };
@@ -169,7 +170,7 @@ index 7866575d411..4dafc8d62dd 100644
      let has_dynamic = metadata.iter().any(|m| !matches!(m.payload_size, OffloadSize::Static(_)));
      let (ty, ty2, a1, a2, a4) = crate::builder::gpu_helper::preper_datatransfers(
          bx,
-@@ -2067,8 +2004,7 @@ fn codegen_offload_preload<'ll, 'tcx>(
+@@ -2061,8 +1998,7 @@ fn codegen_offload_preload<'ll, 'tcx>(
      crate::builder::gpu_helper::generate_mapper_call(
          bx,
          geps,

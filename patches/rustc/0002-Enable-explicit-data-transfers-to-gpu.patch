@@ -1,43 +1,44 @@
-From ede40483c1772ad508d38276555c7361ca755d5c Mon Sep 17 00:00:00 2001
+From f1f669a1826bdc4ddac5357167c18f1e9bc93754 Mon Sep 17 00:00:00 2001
 From: Manuel Drehwald <git@manuel.drehwald.info>
 Date: Sun, 31 May 2026 16:52:05 -0700
-Subject: [PATCH 6/9] Enable explicit data transfers to gpu impl drop for
+Subject: [PATCH 2/5] Enable explicit data transfers to gpu impl drop for
  PreloadMut and Preload, which must returned the mutated value only generate
  kernel globals for kernels, not for preload/drop memtransfers make preload
  nowait, todo: await on kernel launch temporarily make transfer sync compiles
  rustc and rustperf prepare-async-llvm-offload move to async launch, someitmes
  ~2x slower, sometimes 2x faster add sync() call to synchronize before drop
 
+(cherry picked from commit ede40483c1772ad508d38276555c7361ca755d5c)
 ---
  compiler/rustc_codegen_llvm/src/back/write.rs |   2 +-
  compiler/rustc_codegen_llvm/src/builder.rs    |   1 +
  .../src/builder/gpu_helper.rs                 | 178 ++++++++++++++
  .../src/builder/gpu_offload.rs                | 217 ++++--------------
- compiler/rustc_codegen_llvm/src/intrinsic.rs  | 193 +++++++++++++++-
+ compiler/rustc_codegen_llvm/src/intrinsic.rs  | 195 +++++++++++++++-
  .../rustc_hir_analysis/src/check/intrinsic.rs |   5 +
  compiler/rustc_span/src/symbol.rs             |   2 +
  library/core/src/intrinsics/mod.rs            |   8 +
  library/core/src/offload/mod.rs               |  60 +++++
  .../gpu_offload/explicit_memtransfer.rs       |  28 +++
- 10 files changed, 516 insertions(+), 178 deletions(-)
+ 10 files changed, 517 insertions(+), 179 deletions(-)
  create mode 100644 compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs
  create mode 100644 tests/codegen-llvm/gpu_offload/explicit_memtransfer.rs
 
 diff --git a/compiler/rustc_codegen_llvm/src/back/write.rs b/compiler/rustc_codegen_llvm/src/back/write.rs
-index dd2dbdff6b8..4e0e522ab9e 100644
+index 872c022373d..1a7ee72237e 100644
 --- a/compiler/rustc_codegen_llvm/src/back/write.rs
 +++ b/compiler/rustc_codegen_llvm/src/back/write.rs
-@@ -32,7 +32,7 @@
+@@ -33,7 +33,7 @@
      LlvmSelfProfiler, selfprofile_after_pass_callback, selfprofile_before_pass_callback,
  };
  use crate::builder::SBuilder;
 -use crate::builder::gpu_offload::scalar_width;
 +use crate::builder::gpu_helper::scalar_width;
- use crate::common::AsCCharPtr;
  use crate::context::SimpleCx;
  use crate::diagnostics::{
+     CopyBitcode, FromLlvmDiag, FromLlvmOptimizationDiag, LlvmError, ParseTargetMachineConfig,
 diff --git a/compiler/rustc_codegen_llvm/src/builder.rs b/compiler/rustc_codegen_llvm/src/builder.rs
-index abc71f450a5..f1309645d7d 100644
+index 279c11257a6..20840a95b1b 100644
 --- a/compiler/rustc_codegen_llvm/src/builder.rs
 +++ b/compiler/rustc_codegen_llvm/src/builder.rs
 @@ -4,6 +4,7 @@
@@ -548,18 +549,20 @@ index d3bb8d7c3e6..ec7c9ccc4f0 100644
          let ptr = builder.inbounds_gep(tgt_kernel_decl, a5, &[i32_0, cx.get_const_i32(i as u64)]);
          let name = std::ffi::CString::new(value.1).unwrap();
 diff --git a/compiler/rustc_codegen_llvm/src/intrinsic.rs b/compiler/rustc_codegen_llvm/src/intrinsic.rs
-index 454347a5e04..cd16b83617f 100644
+index 6fcdd6e9572..bbcf6076a0e 100644
 --- a/compiler/rustc_codegen_llvm/src/intrinsic.rs
 +++ b/compiler/rustc_codegen_llvm/src/intrinsic.rs
-@@ -21,7 +21,7 @@
- use rustc_middle::mir::BinOp;
- use rustc_middle::ty::consts::ConstExt;
+@@ -21,8 +21,8 @@
+ use rustc_middle::mir::interpret::{AllocId, Allocation, ErrorHandled, GlobalAlloc, alloc_range};
+ use rustc_middle::mir::{self, BinOp};
  use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, HasTypingEnv, LayoutOf};
 -use rustc_middle::ty::offload_meta::OffloadMetadata;
+-use rustc_middle::ty::{self, GenericArgsRef, Instance, SimdAlign, Ty, TyCtxt};
 +use rustc_middle::ty::offload_meta::{MappingFlags, OffloadMetadata};
- use rustc_middle::ty::{self, GenericArgsRef, Instance, SimdAlign, Ty, TyCtxt, TypingEnv};
++use rustc_middle::ty::{self, GenericArgsRef, Instance, SimdAlign, Ty, TyCtxt, TypingEnv};
  use rustc_session::diagnostics::feature_err;
  use rustc_span::{ErrorGuaranteed, Span, Symbol, bug, span_bug, sym};
+ use rustc_structures::CrateType;
 @@ -36,13 +36,17 @@
  use crate::abi::FnAbiLlvmExt;
  use crate::builder::Builder;
@@ -577,9 +580,9 @@ index 454347a5e04..cd16b83617f 100644
  };
 +use crate::intrinsic::ty::offload_meta::OffloadSize;
  use crate::intrinsic::ty::typetree::fnc_typetrees;
- use crate::llvm::{self, Attribute, AttributePlace, Type, Value};
+ use crate::llvm::{self, Attribute, AttributePlace, Metadata, Type, Value};
  use crate::type_of::LayoutLlvmExt;
-@@ -229,6 +233,16 @@ fn codegen_intrinsic_call(
+@@ -226,6 +230,16 @@ fn codegen_intrinsic_call(
              sym::autodiff => {
                  return codegen_autodiff(self, instance, args, result_layout, result_place);
              }
@@ -596,7 +599,7 @@ index 454347a5e04..cd16b83617f 100644
              sym::offload => {
                  if tcx.sess.opts.unstable_opts.offload.is_empty() {
                      let _ = tcx.dcx().emit_err(OffloadWithoutEnable);
-@@ -1918,6 +1932,179 @@ fn codegen_autodiff<'ll, 'tcx>(
+@@ -1912,6 +1926,179 @@ fn codegen_autodiff<'ll, 'tcx>(
      )
  }
  
@@ -776,7 +779,7 @@ index 454347a5e04..cd16b83617f 100644
  // Generates the LLVM code to offload a Rust function to a target device (e.g., GPU).
  // For each kernel call, it generates the necessary globals (including metadata such as
  // size and pass mode), manages memory mapping to and from the device, handles all
-@@ -1989,7 +2176,7 @@ fn codegen_offload<'ll, 'tcx>(
+@@ -1983,7 +2170,7 @@ fn codegen_offload<'ll, 'tcx>(
          }
      };
      let offload_data =
@@ -786,11 +789,11 @@ index 454347a5e04..cd16b83617f 100644
          bx,
          &offload_data,
 diff --git a/compiler/rustc_hir_analysis/src/check/intrinsic.rs b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
-index b566f6b04bf..b411062b623 100644
+index 804e84324f0..8ea4f2e9ba3 100644
 --- a/compiler/rustc_hir_analysis/src/check/intrinsic.rs
 +++ b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
-@@ -154,6 +154,8 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
-         | sym::non_exhaustive
+@@ -153,6 +153,8 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
+         | sym::needs_drop
          | sym::offload
          | sym::offload_get_num_devices
 +        | sym::offload_preload
@@ -798,7 +801,7 @@ index b566f6b04bf..b411062b623 100644
          | sym::offset_of
          | sym::overflow_checks
          | sym::powf16
-@@ -393,6 +395,9 @@ pub(crate) fn check_intrinsic_type(
+@@ -399,6 +401,9 @@ pub(crate) fn check_intrinsic_type(
              param(2),
          ),
          sym::offload_get_num_devices => (0, 0, vec![], tcx.types.i32),
@@ -809,10 +812,10 @@ index b566f6b04bf..b411062b623 100644
          sym::arith_offset => (
              1,
 diff --git a/compiler/rustc_span/src/symbol.rs b/compiler/rustc_span/src/symbol.rs
-index e3fcc6813b9..21f1ea1b77c 100644
+index 9f9e5fd6cba..5074adb6788 100644
 --- a/compiler/rustc_span/src/symbol.rs
 +++ b/compiler/rustc_span/src/symbol.rs
-@@ -1492,6 +1492,8 @@
+@@ -1515,6 +1515,8 @@
          off,
          offload,
          offload_get_num_devices,
@@ -822,10 +825,10 @@ index e3fcc6813b9..21f1ea1b77c 100644
          offload_region,
          offset,
 diff --git a/library/core/src/intrinsics/mod.rs b/library/core/src/intrinsics/mod.rs
-index ecc8b66ec57..2058b056b90 100644
+index 550e5248030..c15530131b7 100644
 --- a/library/core/src/intrinsics/mod.rs
 +++ b/library/core/src/intrinsics/mod.rs
-@@ -3826,6 +3826,14 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
+@@ -3842,6 +3842,14 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
  #[rustc_intrinsic]
  pub const fn offload_get_num_devices() -> i32;
  

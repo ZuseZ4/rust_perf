@@ -1,8 +1,9 @@
-From 8a64883e15c44172d40b9365aeb47678857a2ded Mon Sep 17 00:00:00 2001
+From 24369cf7b369d70719b0a4d2920e958dfa945fbf Mon Sep 17 00:00:00 2001
 From: Manuel Drehwald <git@manuel.drehwald.info>
 Date: Tue, 15 Sep 2026 19:52:50 -0400
-Subject: [PATCH 7/9] move to use proper ptr type
+Subject: [PATCH 3/5] move to use proper ptr type
 
+(cherry picked from commit 8a64883e15c44172d40b9365aeb47678857a2ded)
 ---
  compiler/rustc_codegen_llvm/src/intrinsic.rs  | 52 +++++--------------
  .../rustc_hir_analysis/src/check/intrinsic.rs |  2 +-
@@ -11,19 +12,19 @@ Subject: [PATCH 7/9] move to use proper ptr type
  4 files changed, 24 insertions(+), 45 deletions(-)
 
 diff --git a/compiler/rustc_codegen_llvm/src/intrinsic.rs b/compiler/rustc_codegen_llvm/src/intrinsic.rs
-index cd16b83617f..7866575d411 100644
+index bbcf6076a0e..31aef1b1a61 100644
 --- a/compiler/rustc_codegen_llvm/src/intrinsic.rs
 +++ b/compiler/rustc_codegen_llvm/src/intrinsic.rs
 @@ -21,7 +21,7 @@
- use rustc_middle::mir::BinOp;
- use rustc_middle::ty::consts::ConstExt;
+ use rustc_middle::mir::interpret::{AllocId, Allocation, ErrorHandled, GlobalAlloc, alloc_range};
+ use rustc_middle::mir::{self, BinOp};
  use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, HasTypingEnv, LayoutOf};
 -use rustc_middle::ty::offload_meta::{MappingFlags, OffloadMetadata};
 +use rustc_middle::ty::offload_meta::OffloadMetadata;
  use rustc_middle::ty::{self, GenericArgsRef, Instance, SimdAlign, Ty, TyCtxt, TypingEnv};
  use rustc_session::diagnostics::feature_err;
  use rustc_span::{ErrorGuaranteed, Span, Symbol, bug, span_bug, sym};
-@@ -1932,31 +1932,6 @@ fn codegen_autodiff<'ll, 'tcx>(
+@@ -1926,31 +1926,6 @@ fn codegen_autodiff<'ll, 'tcx>(
      )
  }
  
@@ -55,7 +56,7 @@ index cd16b83617f..7866575d411 100644
  fn codegen_offload_preload_drop<'ll, 'tcx>(
      bx: &mut Builder<'_, 'll, 'tcx>,
      tcx: TyCtxt<'tcx>,
-@@ -1965,7 +1940,6 @@ fn codegen_offload_preload_drop<'ll, 'tcx>(
+@@ -1959,7 +1934,6 @@ fn codegen_offload_preload_drop<'ll, 'tcx>(
  ) {
      let cx = bx.cx;
      let ptr_arg = &args[0];
@@ -63,7 +64,7 @@ index cd16b83617f..7866575d411 100644
  
      let pointee_ty = match *ptr_arg.layout.ty.kind() {
          ty::RawPtr(pointee_ty, _) => pointee_ty,
-@@ -1979,16 +1953,18 @@ fn codegen_offload_preload_drop<'ll, 'tcx>(
+@@ -1973,16 +1947,18 @@ fn codegen_offload_preload_drop<'ll, 'tcx>(
  
      let args = vec![ptr];
  
@@ -92,7 +93,7 @@ index cd16b83617f..7866575d411 100644
      let metadata: &[OffloadMetadata; 1] = &[meta];
  
      let types: &Type = cx.layout_of(pointee_ty).llvm_type(cx);
-@@ -2062,7 +2038,7 @@ fn codegen_offload_preload<'ll, 'tcx>(
+@@ -2056,7 +2032,7 @@ fn codegen_offload_preload<'ll, 'tcx>(
          _ => bug!("expected preload argument to be a raw pointer, got {arg_ty:?}"),
      };
  
@@ -102,10 +103,10 @@ index cd16b83617f..7866575d411 100644
      let types = cx.layout_of(pointee_ty).llvm_type(cx);
  
 diff --git a/compiler/rustc_hir_analysis/src/check/intrinsic.rs b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
-index b411062b623..ab74026db0c 100644
+index 8ea4f2e9ba3..71a492bef6c 100644
 --- a/compiler/rustc_hir_analysis/src/check/intrinsic.rs
 +++ b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
-@@ -396,7 +396,7 @@ pub(crate) fn check_intrinsic_type(
+@@ -402,7 +402,7 @@ pub(crate) fn check_intrinsic_type(
          ),
          sym::offload_get_num_devices => (0, 0, vec![], tcx.types.i32),
          sym::offload_preload | sym::offload_preload_end => {
@@ -115,10 +116,10 @@ index b411062b623..ab74026db0c 100644
          sym::offset => (2, 0, vec![param(0), param(1)], param(0)),
          sym::arith_offset => (
 diff --git a/library/core/src/intrinsics/mod.rs b/library/core/src/intrinsics/mod.rs
-index 2058b056b90..eb4d463c396 100644
+index c15530131b7..f9e92cb8a31 100644
 --- a/library/core/src/intrinsics/mod.rs
 +++ b/library/core/src/intrinsics/mod.rs
-@@ -3826,13 +3826,16 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
+@@ -3842,13 +3842,16 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
  #[rustc_intrinsic]
  pub const fn offload_get_num_devices() -> i32;
  

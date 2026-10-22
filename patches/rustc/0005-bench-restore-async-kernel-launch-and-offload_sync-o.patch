@@ -1,7 +1,7 @@
-From 3196f3cc9833bf698d241dbd395a1018ad8f93ed Mon Sep 17 00:00:00 2001
+From 8ae47588fa6a980dff11dfe7cc1a90a21d215d6b Mon Sep 17 00:00:00 2001
 From: Manuel Drehwald <git@manuel.drehwald.info>
 Date: Thu, 8 Oct 2026 12:36:27 -0400
-Subject: [PATCH 9/9] bench: restore async kernel launch and offload_sync on
+Subject: [PATCH 5/5] bench: restore async kernel launch and offload_sync on
  top of #156620
 
 Reverse of 1028fdb9c2c (simplify offload preload to always be sync), adapted to the
@@ -10,6 +10,7 @@ through __tgt_target_kernel_async with a thread-local async info; preload_end an
 offload_sync synchronize it. Needs the libomptarget side from llvm/llvm-project#212862.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+(cherry picked from commit 3196f3cc9833bf698d241dbd395a1018ad8f93ed)
 ---
  compiler/rustc_attr_ir/src/lang_items.rs      |   6 +
  .../src/builder/gpu_helper.rs                 |  64 ++++-
@@ -23,10 +24,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
  9 files changed, 351 insertions(+), 45 deletions(-)
 
 diff --git a/compiler/rustc_attr_ir/src/lang_items.rs b/compiler/rustc_attr_ir/src/lang_items.rs
-index 60890f77992..a221ef45721 100644
+index d715a6d3af8..07763a3e7ad 100644
 --- a/compiler/rustc_attr_ir/src/lang_items.rs
 +++ b/compiler/rustc_attr_ir/src/lang_items.rs
-@@ -343,6 +343,12 @@ fn stable_hash<Hcx: StableHashCtxt>(&self, _: &mut Hcx, hasher: &mut StableHashe
+@@ -344,6 +344,12 @@ fn stable_hash<Hcx: StableHashCtxt>(&self, _: &mut Hcx, hasher: &mut StableHashe
      DropGlue,                sym::drop_glue,           drop_glue_fn,               Target::Fn,             GenericRequirement::Exact(1);
      AllocLayout,             sym::alloc_layout,        alloc_layout,               Target::Struct,         GenericRequirement::None;
  
@@ -474,12 +475,12 @@ index ec7c9ccc4f0..87a95e27dea 100644
 +    //);
  }
 diff --git a/compiler/rustc_codegen_llvm/src/intrinsic.rs b/compiler/rustc_codegen_llvm/src/intrinsic.rs
-index 4dafc8d62dd..bcead45690b 100644
+index ed09b806179..61026329e67 100644
 --- a/compiler/rustc_codegen_llvm/src/intrinsic.rs
 +++ b/compiler/rustc_codegen_llvm/src/intrinsic.rs
 @@ -21,7 +21,7 @@
- use rustc_middle::mir::BinOp;
- use rustc_middle::ty::consts::ConstExt;
+ use rustc_middle::mir::interpret::{AllocId, Allocation, ErrorHandled, GlobalAlloc, alloc_range};
+ use rustc_middle::mir::{self, BinOp};
  use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, HasTypingEnv, LayoutOf};
 -use rustc_middle::ty::offload_meta::{OffloadMetadata, MappingFlags};
 +use rustc_middle::ty::offload_meta::OffloadMetadata;
@@ -498,7 +499,7 @@ index 4dafc8d62dd..bcead45690b 100644
  use crate::context::CodegenCx;
  use crate::declare::declare_raw_fn;
  use crate::diagnostics::{
-@@ -233,6 +230,10 @@ fn codegen_intrinsic_call(
+@@ -230,6 +227,10 @@ fn codegen_intrinsic_call(
              sym::autodiff => {
                  return codegen_autodiff(self, instance, args, result_layout, result_place);
              }
@@ -509,7 +510,7 @@ index 4dafc8d62dd..bcead45690b 100644
  
              sym::offload_preload => {
                  codegen_offload_preload(self, tcx, args, TransferType::Begin);
-@@ -1932,6 +1933,16 @@ fn codegen_autodiff<'ll, 'tcx>(
+@@ -1926,6 +1927,16 @@ fn codegen_autodiff<'ll, 'tcx>(
      )
  }
  
@@ -526,7 +527,7 @@ index 4dafc8d62dd..bcead45690b 100644
  // For each preload{_mut} *call*, we now use some of our previous declared globals to move data to the gpu.
  // For now, we only handle the data transfer part of it. Consecutive calls become a no-op on the
  // LLVM side.
-@@ -1984,9 +1995,20 @@ fn codegen_offload_preload<'ll, 'tcx>(
+@@ -1978,9 +1989,20 @@ fn codegen_offload_preload<'ll, 'tcx>(
      let target_symbol = cx.generate_local_symbol_name("");
      let offload_data =
          gen_define_handling(&cx, metadata, target_symbol, offload_globals, transfer_type);
@@ -550,7 +551,7 @@ index 4dafc8d62dd..bcead45690b 100644
          // logic bug
          TransferType::Kernel => bug!("Kernel transfer type is not valid for preload"),
      };
-@@ -2004,14 +2026,19 @@ fn codegen_offload_preload<'ll, 'tcx>(
+@@ -1998,14 +2020,19 @@ fn codegen_offload_preload<'ll, 'tcx>(
      crate::builder::gpu_helper::generate_mapper_call(
          bx,
          geps,
@@ -573,7 +574,7 @@ index 4dafc8d62dd..bcead45690b 100644
      Kernel,
      End,
 diff --git a/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs b/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs
-index e6b70ce2ca7..8d99425864e 100644
+index 5099b9f86c1..ff580c97296 100644
 --- a/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs
 +++ b/compiler/rustc_codegen_ssa/src/mir/intrinsic.rs
 @@ -136,6 +136,7 @@ pub fn codegen_intrinsic_call(
@@ -585,18 +586,18 @@ index e6b70ce2ca7..8d99425864e 100644
                  _ => {
                      span_bug!(
 diff --git a/compiler/rustc_hir_analysis/src/check/intrinsic.rs b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
-index ab74026db0c..3d7e81f0d99 100644
+index 71a492bef6c..d92d2784e96 100644
 --- a/compiler/rustc_hir_analysis/src/check/intrinsic.rs
 +++ b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
-@@ -154,6 +154,7 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
-         | sym::non_exhaustive
+@@ -153,6 +153,7 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
+         | sym::needs_drop
          | sym::offload
          | sym::offload_get_num_devices
 +        | sym::offload_sync
          | sym::offload_preload
          | sym::offload_preload_end
          | sym::offset_of
-@@ -395,9 +396,8 @@ pub(crate) fn check_intrinsic_type(
+@@ -401,9 +402,8 @@ pub(crate) fn check_intrinsic_type(
              param(2),
          ),
          sym::offload_get_num_devices => (0, 0, vec![], tcx.types.i32),
@@ -609,10 +610,10 @@ index ab74026db0c..3d7e81f0d99 100644
          sym::arith_offset => (
              1,
 diff --git a/compiler/rustc_span/src/symbol.rs b/compiler/rustc_span/src/symbol.rs
-index 21f1ea1b77c..8f1019c1020 100644
+index 5074adb6788..0de794cde35 100644
 --- a/compiler/rustc_span/src/symbol.rs
 +++ b/compiler/rustc_span/src/symbol.rs
-@@ -1492,6 +1492,7 @@
+@@ -1515,6 +1515,7 @@
          off,
          offload,
          offload_get_num_devices,
@@ -620,7 +621,7 @@ index 21f1ea1b77c..8f1019c1020 100644
          offload_preload,
          offload_preload_end,
          offload_kernel,
-@@ -1634,6 +1635,10 @@
+@@ -1658,6 +1659,10 @@
          prefetch_write_instruction,
          prefix_nops,
          preg,
@@ -632,10 +633,10 @@ index 21f1ea1b77c..8f1019c1020 100644
          prelude_import,
          preserves_flags,
 diff --git a/library/core/src/intrinsics/mod.rs b/library/core/src/intrinsics/mod.rs
-index eb4d463c396..fa76bfa170e 100644
+index f9e92cb8a31..f68f74bb24d 100644
 --- a/library/core/src/intrinsics/mod.rs
 +++ b/library/core/src/intrinsics/mod.rs
-@@ -3833,6 +3833,11 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
+@@ -3849,6 +3849,11 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
  #[rustc_nounwind]
  pub fn offload_preload<P>(ptr: P);
  
