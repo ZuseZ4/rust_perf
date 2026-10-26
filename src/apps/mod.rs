@@ -1,3 +1,4 @@
+#![feature(stmt_expr_attributes)]
 #[cfg(feature = "del_dot_vec_2d")]
 pub mod del_dot_vec_2d;
 #[cfg(feature = "energy")]

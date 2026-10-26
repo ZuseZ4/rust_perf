@@ -1,0 +1,947 @@
+From ede40483c1772ad508d38276555c7361ca755d5c Mon Sep 17 00:00:00 2001
+From: Manuel Drehwald <git@manuel.drehwald.info>
+Date: Sun, 31 May 2026 16:52:05 -0700
+Subject: [PATCH 6/9] Enable explicit data transfers to gpu impl drop for
+ PreloadMut and Preload, which must returned the mutated value only generate
+ kernel globals for kernels, not for preload/drop memtransfers make preload
+ nowait, todo: await on kernel launch temporarily make transfer sync compiles
+ rustc and rustperf prepare-async-llvm-offload move to async launch, someitmes
+ ~2x slower, sometimes 2x faster add sync() call to synchronize before drop
+
+---
+ compiler/rustc_codegen_llvm/src/back/write.rs |   2 +-
+ compiler/rustc_codegen_llvm/src/builder.rs    |   1 +
+ .../src/builder/gpu_helper.rs                 | 178 ++++++++++++++
+ .../src/builder/gpu_offload.rs                | 217 ++++--------------
+ compiler/rustc_codegen_llvm/src/intrinsic.rs  | 193 +++++++++++++++-
+ .../rustc_hir_analysis/src/check/intrinsic.rs |   5 +
+ compiler/rustc_span/src/symbol.rs             |   2 +
+ library/core/src/intrinsics/mod.rs            |   8 +
+ library/core/src/offload/mod.rs               |  60 +++++
+ .../gpu_offload/explicit_memtransfer.rs       |  28 +++
+ 10 files changed, 516 insertions(+), 178 deletions(-)
+ create mode 100644 compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs
+ create mode 100644 tests/codegen-llvm/gpu_offload/explicit_memtransfer.rs
+
+diff --git a/compiler/rustc_codegen_llvm/src/back/write.rs b/compiler/rustc_codegen_llvm/src/back/write.rs
+index dd2dbdff6b8..4e0e522ab9e 100644
+--- a/compiler/rustc_codegen_llvm/src/back/write.rs
++++ b/compiler/rustc_codegen_llvm/src/back/write.rs
+@@ -32,7 +32,7 @@
+     LlvmSelfProfiler, selfprofile_after_pass_callback, selfprofile_before_pass_callback,
+ };
+ use crate::builder::SBuilder;
+-use crate::builder::gpu_offload::scalar_width;
++use crate::builder::gpu_helper::scalar_width;
+ use crate::common::AsCCharPtr;
+ use crate::context::SimpleCx;
+ use crate::diagnostics::{
+diff --git a/compiler/rustc_codegen_llvm/src/builder.rs b/compiler/rustc_codegen_llvm/src/builder.rs
+index abc71f450a5..f1309645d7d 100644
+--- a/compiler/rustc_codegen_llvm/src/builder.rs
++++ b/compiler/rustc_codegen_llvm/src/builder.rs
+@@ -4,6 +4,7 @@
+ 
+ use rustc_ast::expand::typetree::FncTree;
+ pub(crate) mod autodiff;
++pub(crate) mod gpu_helper;
+ pub(crate) mod gpu_offload;
+ 
+ use libc::{c_char, c_uint};
+diff --git a/compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs b/compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs
+new file mode 100644
+index 00000000000..61c91614301
+--- /dev/null
++++ b/compiler/rustc_codegen_llvm/src/builder/gpu_helper.rs
+@@ -0,0 +1,178 @@
++use crate::SimpleCx;
++use crate::builder::Builder;
++use crate::llvm;
++use crate::llvm::{Type, Value};
++use rustc_abi::Align;
++use rustc_codegen_ssa::MemFlags;
++use rustc_codegen_ssa::common::TypeKind;
++use rustc_codegen_ssa::traits::{BaseTypeCodegenMethods, BuilderMethods, ReturnSlot};
++use rustc_middle::bug;
++use rustc_middle::ty::offload_meta::{OffloadMetadata, OffloadSize};
++
++pub(crate) fn scalar_width<'ll>(cx: &'ll SimpleCx<'_>, ty: &'ll Type) -> u64 {
++    match cx.type_kind(ty) {
++        TypeKind::Half
++        | TypeKind::Float
++        | TypeKind::Double
++        | TypeKind::X86_FP80
++        | TypeKind::FP128
++        | TypeKind::PPC_FP128 => cx.float_width(ty) as u64,
++        TypeKind::Integer => cx.int_width(ty),
++        other => bug!("scalar_width was called on a non scalar type {other:?}"),
++    }
++}
++
++fn get_runtime_size<'ll, 'tcx>(
++    builder: &mut Builder<'_, 'll, 'tcx>,
++    args: &[&'ll Value],
++    index: usize,
++    meta: &OffloadMetadata,
++) -> &'ll Value {
++    match meta.payload_size {
++        OffloadSize::Slice { element_size } => {
++            let length_idx = index + 1;
++            let length = args[length_idx];
++            let length_i64 = builder.intcast(length, builder.cx.type_i64(), false);
++            builder.mul(length_i64, builder.cx.get_const_i64(element_size))
++        }
++        _ => bug!("unexpected offload size {:?}", meta.payload_size),
++    }
++}
++
++// For now we have a very simplistic indexing scheme into our
++// offload_{baseptrs,ptrs,sizes}. We will probably improve this along with our gpu frontend pr.
++pub(crate) fn get_geps<'ll, 'tcx>(
++    builder: &mut Builder<'_, 'll, 'tcx>,
++    ty: &'ll Type,
++    ty2: &'ll Type,
++    a1: &'ll Value,
++    a2: &'ll Value,
++    a4: &'ll Value,
++    is_dynamic: bool,
++) -> [&'ll Value; 3] {
++    let cx = builder.cx;
++    let i32_0 = cx.get_const_i32(0);
++
++    let gep1 = builder.inbounds_gep(ty, a1, &[i32_0, i32_0]);
++    let gep2 = builder.inbounds_gep(ty, a2, &[i32_0, i32_0]);
++    let gep3 = if is_dynamic { builder.inbounds_gep(ty2, a4, &[i32_0, i32_0]) } else { a4 };
++    [gep1, gep2, gep3]
++}
++
++pub(crate) fn generate_mapper_call<'ll, 'tcx>(
++    builder: &mut Builder<'_, 'll, 'tcx>,
++    geps: [&'ll Value; 3],
++    o_type: &'ll Value,
++    fn_to_call: &'ll Value,
++    fn_ty: &'ll Type,
++    num_args: u64,
++    s_ident_t: &'ll Value,
++) {
++    let cx = builder.cx;
++    let nullptr = cx.const_null(cx.type_ptr());
++    let i64_max = cx.get_const_i64(u64::MAX);
++    let num_args = cx.get_const_i32(num_args);
++    let args =
++        vec![s_ident_t, i64_max, num_args, geps[0], geps[1], geps[2], o_type, nullptr, nullptr];
++    builder.call(fn_ty, None, None, fn_to_call, ReturnSlot::Direct, &args, None, None);
++}
++
++pub(crate) fn preper_datatransfers<'ll, 'tcx>(
++    builder: &mut Builder<'_, 'll, 'tcx>,
++    args: &[&'ll Value],
++    types: &[&Type],
++    offload_sizes: &'ll Value,
++    metadata: &[OffloadMetadata],
++    has_dynamic: bool,
++) -> (&'ll Type, &'ll Type, &'ll Value, &'ll Value, &'ll Value) {
++    let cx = builder.cx;
++    let num_args = types.len() as u64;
++    let bb = builder.llbb();
++
++    // Step 0)
++    unsafe {
++        llvm::LLVMRustPositionBuilderPastAllocas(&builder.llbuilder, builder.llfn());
++    }
++
++    let ty = cx.type_array(cx.type_ptr(), num_args);
++    // Baseptr are just the input pointer to the kernel, stored in a local alloca
++    let a1 = builder.direct_alloca(ty, Align::EIGHT, ".offload_baseptrs");
++    // Ptrs are the result of a gep into the baseptr, at least for our trivial types.
++    let a2 = builder.direct_alloca(ty, Align::EIGHT, ".offload_ptrs");
++    // These represent the sizes in bytes, e.g. the entry for `&[f64; 16]` will be 8*16.
++    let ty2 = cx.type_array(cx.type_i64(), num_args);
++
++    let a4 = if has_dynamic {
++        let alloc = builder.direct_alloca(ty2, Align::EIGHT, ".offload_sizes");
++
++        builder.memcpy(
++            alloc,
++            Align::EIGHT,
++            offload_sizes,
++            Align::EIGHT,
++            cx.get_const_i64(8 * args.len() as u64),
++            MemFlags::empty(),
++            None,
++        );
++
++        alloc
++    } else {
++        offload_sizes
++    };
++
++    // Step 1)
++    unsafe {
++        llvm::LLVMPositionBuilderAtEnd(&builder.llbuilder, bb);
++    }
++
++    // Now we allocate once per function param, a copy to be passed to one of our maps.
++    let mut vals = vec![];
++    let mut geps = vec![];
++    let i32_0 = cx.get_const_i32(0);
++    for &v in args {
++        let ty = cx.val_ty(v);
++        let ty_kind = cx.type_kind(ty);
++        let (base_val, gep_base) = match ty_kind {
++            TypeKind::Pointer => (v, v),
++            TypeKind::Half | TypeKind::Float | TypeKind::Double | TypeKind::Integer => {
++                // FIXME(Sa4dUs): check for `f128` support, latest NVIDIA cards support it
++                let num_bits = scalar_width(cx, ty);
++
++                let bb = builder.llbb();
++                unsafe {
++                    llvm::LLVMRustPositionBuilderPastAllocas(builder.llbuilder, builder.llfn());
++                }
++                let addr = builder.direct_alloca(cx.type_i64(), Align::EIGHT, "addr");
++                unsafe {
++                    llvm::LLVMPositionBuilderAtEnd(builder.llbuilder, bb);
++                }
++
++                let cast = builder.bitcast(v, cx.type_ix(num_bits));
++                let value = builder.zext(cast, cx.type_i64());
++                builder.store(value, addr, Align::EIGHT);
++                (value, addr)
++            }
++            other => bug!("offload does not support {other:?}"),
++        };
++
++        let gep = builder.inbounds_gep(cx.type_f32(), gep_base, &[i32_0]);
++
++        vals.push(base_val);
++        geps.push(gep);
++    }
++
++    for i in 0..num_args {
++        let idx = cx.get_const_i32(i);
++        let gep1 = builder.inbounds_gep(ty, a1, &[i32_0, idx]);
++        builder.store(vals[i as usize], gep1, Align::EIGHT);
++        let gep2 = builder.inbounds_gep(ty, a2, &[i32_0, idx]);
++        builder.store(geps[i as usize], gep2, Align::EIGHT);
++
++        if !matches!(metadata[i as usize].payload_size, OffloadSize::Static(_)) {
++            let gep3 = builder.inbounds_gep(ty2, a4, &[i32_0, idx]);
++            let size_val = get_runtime_size(builder, args, i as usize, &metadata[i as usize]);
++            builder.store(size_val, gep3, Align::EIGHT);
++        }
++    }
++    (ty, ty2, a1, a2, a4)
++}
+diff --git a/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs b/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs
+index d3bb8d7c3e6..ec7c9ccc4f0 100644
+--- a/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs
++++ b/compiler/rustc_codegen_llvm/src/builder/gpu_offload.rs
+@@ -3,8 +3,6 @@
+ use bitflags::Flags;
+ use llvm::Linkage::*;
+ use rustc_abi::Align;
+-use rustc_codegen_ssa::MemFlags;
+-use rustc_codegen_ssa::common::TypeKind;
+ use rustc_codegen_ssa::mir::operand::{OperandRef, OperandValue};
+ use rustc_codegen_ssa::traits::{BaseTypeCodegenMethods, BuilderMethods, ReturnSlot};
+ use rustc_middle::ty::offload_meta::{MappingFlags, OffloadMetadata, OffloadSize};
+@@ -12,8 +10,10 @@
+ 
+ use crate::attributes;
+ use crate::builder::Builder;
++use crate::builder::gpu_helper::*;
+ use crate::common::CodegenCx;
+ use crate::context::SimpleCx;
++use crate::intrinsic::TransferType;
+ use crate::llvm::AttributePlace::Function;
+ use crate::llvm::{self, Linkage, Type, Value};
+ 
+@@ -289,7 +289,7 @@ fn new<'ll, 'tcx>(
+ pub(crate) struct OffloadKernelGlobals<'ll> {
+     pub offload_sizes: &'ll llvm::Value,
+     pub memtransfer_begin: &'ll llvm::Value,
+-    pub memtransfer_kernel: &'ll llvm::Value,
++    pub memtransfer_kernel: Option<&'ll llvm::Value>,
+     pub memtransfer_end: &'ll llvm::Value,
+     pub region_id: &'ll llvm::Value,
+ }
+@@ -361,12 +361,14 @@ pub(crate) fn gen_define_handling<'ll>(
+     metadata: &[OffloadMetadata],
+     symbol: String,
+     offload_globals: &OffloadGlobals<'ll>,
++    transfer: TransferType,
+ ) -> OffloadKernelGlobals<'ll> {
+     if let Some(entry) = cx.offload_kernel_cache.borrow().get(&symbol) {
+         return *entry;
+     }
+ 
+     let offload_entry_ty = offload_globals.offload_entry_ty;
++    let gen_kernel = matches!(transfer, TransferType::Kernel);
+ 
+     let (sizes, transfer): (Vec<_>, Vec<_>) =
+         metadata.iter().map(|m| (m.payload_size, m.mode)).unzip();
+@@ -409,8 +411,16 @@ pub(crate) fn gen_define_handling<'ll>(
+         add_priv_unnamed_arr(&cx, &format!(".offload_sizes.{symbol}"), &actual_sizes);
+     let memtransfer_begin =
+         add_priv_unnamed_arr(&cx, &format!(".offload_maptypes.{symbol}.begin"), &transfer_to);
+-    let memtransfer_kernel =
+-        add_priv_unnamed_arr(&cx, &format!(".offload_maptypes.{symbol}.kernel"), &transfer_kernel);
++
++    let memtransfer_kernel = if gen_kernel {
++        Some(add_priv_unnamed_arr(
++            &cx,
++            &format!(".offload_maptypes.{symbol}.kernel"),
++            &transfer_kernel,
++        ))
++    } else {
++        None
++    };
+     let memtransfer_end =
+         add_priv_unnamed_arr(&cx, &format!(".offload_maptypes.{symbol}.end"), &transfer_from);
+ 
+@@ -421,31 +431,33 @@ pub(crate) fn gen_define_handling<'ll>(
+     let initializer = cx.get_const_i8(0);
+     let region_id = add_global(&cx, &name, initializer, WeakAnyLinkage);
+ 
+-    let c_entry_name = CString::new(symbol.clone()).unwrap();
+-    let c_val = c_entry_name.as_bytes_with_nul();
+-    let offload_entry_name = format!(".offloading.entry_name.{symbol}");
++    if gen_kernel {
++        let c_entry_name = CString::new(symbol.clone()).unwrap();
++        let c_val = c_entry_name.as_bytes_with_nul();
++        let offload_entry_name = format!(".offloading.entry_name.{symbol}");
+ 
+-    let initializer = crate::common::bytes_in_context(cx.llcx, c_val);
+-    let llglobal = add_unnamed_global(&cx, &offload_entry_name, initializer, InternalLinkage);
+-    llvm::set_alignment(llglobal, Align::ONE);
+-    llvm::set_section(llglobal, c".llvm.rodata.offloading");
++        let initializer = crate::common::bytes_in_context(cx.llcx, c_val);
++        let llglobal = add_unnamed_global(&cx, &offload_entry_name, initializer, InternalLinkage);
++        llvm::set_alignment(llglobal, Align::ONE);
++        llvm::set_section(llglobal, c".llvm.rodata.offloading");
+ 
+-    let name = format!(".offloading.entry.{symbol}");
++        let name = format!(".offloading.entry.{symbol}");
+ 
+-    // See the __tgt_offload_entry documentation above.
+-    let elems = TgtOffloadEntry::new(&cx, region_id, llglobal);
++        // See the __tgt_offload_entry documentation above.
++        let elems = TgtOffloadEntry::new(&cx, region_id, llglobal);
+ 
+-    let initializer = crate::common::named_struct(offload_entry_ty, &elems);
+-    let c_name = CString::new(name).unwrap();
+-    let offload_entry = llvm::add_global(cx.llmod, offload_entry_ty, &c_name);
+-    llvm::set_global_constant(offload_entry, true);
+-    llvm::set_linkage(offload_entry, WeakAnyLinkage);
+-    llvm::set_initializer(offload_entry, initializer);
+-    llvm::set_alignment(offload_entry, Align::EIGHT);
+-    let c_section_name = CString::new("llvm_offload_entries").unwrap();
+-    llvm::set_section(offload_entry, &c_section_name);
++        let initializer = crate::common::named_struct(offload_entry_ty, &elems);
++        let c_name = CString::new(name).unwrap();
++        let offload_entry = llvm::add_global(cx.llmod, offload_entry_ty, &c_name);
++        llvm::set_global_constant(offload_entry, true);
++        llvm::set_linkage(offload_entry, WeakAnyLinkage);
++        llvm::set_initializer(offload_entry, initializer);
++        llvm::set_alignment(offload_entry, Align::EIGHT);
++        let c_section_name = CString::new("llvm_offload_entries").unwrap();
++        llvm::set_section(offload_entry, &c_section_name);
+ 
+-    cx.add_compiler_used_global(offload_entry);
++        cx.add_compiler_used_global(offload_entry);
++    }
+ 
+     let result = OffloadKernelGlobals {
+         offload_sizes,
+@@ -475,36 +487,6 @@ fn declare_offload_fn<'ll>(
+     )
+ }
+ 
+-pub(crate) fn scalar_width<'ll>(cx: &'ll SimpleCx<'_>, ty: &'ll Type) -> u64 {
+-    match cx.type_kind(ty) {
+-        TypeKind::Half
+-        | TypeKind::Float
+-        | TypeKind::Double
+-        | TypeKind::X86_FP80
+-        | TypeKind::FP128
+-        | TypeKind::PPC_FP128 => cx.float_width(ty) as u64,
+-        TypeKind::Integer => cx.int_width(ty),
+-        other => bug!("scalar_width was called on a non scalar type {other:?}"),
+-    }
+-}
+-
+-fn get_runtime_size<'ll, 'tcx>(
+-    builder: &mut Builder<'_, 'll, 'tcx>,
+-    args: &[&'ll Value],
+-    index: usize,
+-    meta: &OffloadMetadata,
+-) -> &'ll Value {
+-    match meta.payload_size {
+-        OffloadSize::Slice { element_size } => {
+-            let length_idx = index + 1;
+-            let length = args[length_idx];
+-            let length_i64 = builder.intcast(length, builder.cx.type_i64(), false);
+-            builder.mul(length_i64, builder.cx.get_const_i64(element_size))
+-        }
+-        _ => bug!("unexpected offload size {:?}", meta.payload_size),
+-    }
+-}
+-
+ // For each kernel *call*, we now use some of our previous declared globals to move data to and from
+ // the gpu. For now, we only handle the data transfer part of it.
+ // If two consecutive kernels use the same memory, we still move it to the host and back to the gpu.
+@@ -542,6 +524,7 @@ pub(crate) fn gen_call_handling<'ll, 'tcx>(
+         memtransfer_end,
+         region_id,
+     } = offload_data;
++    let memtransfer_kernel = memtransfer_kernel.unwrap();
+     let OffloadKernelDims { num_workgroups, threads_per_block, workgroup_dims, thread_dims } =
+         offload_dims;
+ 
+@@ -555,136 +538,21 @@ pub(crate) fn gen_call_handling<'ll, 'tcx>(
+     let end_mapper_decl = offload_globals.end_mapper;
+     let fn_ty = offload_globals.mapper_fn_ty;
+ 
++    let (ty, ty2, a1, a2, a4) =
++        preper_datatransfers(builder, args, types, offload_sizes, metadata, has_dynamic);
+     let num_args = types.len() as u64;
+-    let bb = builder.llbb();
++    assert_eq!(num_args as usize, args.len());
+ 
+-    // Step 0)
++    let bb = builder.llbb();
+     unsafe {
+         llvm::LLVMRustPositionBuilderPastAllocas(&builder.llbuilder, builder.llfn());
+     }
+-
+-    let ty = cx.type_array(cx.type_ptr(), num_args);
+-    // Baseptr are just the input pointer to the kernel, stored in a local alloca
+-    let a1 = builder.direct_alloca(ty, Align::EIGHT, ".offload_baseptrs");
+-    // Ptrs are the result of a gep into the baseptr, at least for our trivial types.
+-    let a2 = builder.direct_alloca(ty, Align::EIGHT, ".offload_ptrs");
+-    // These represent the sizes in bytes, e.g. the entry for `&[f64; 16]` will be 8*16.
+-    let ty2 = cx.type_array(cx.type_i64(), num_args);
+-
+-    let a4 = if has_dynamic {
+-        let alloc = builder.direct_alloca(ty2, Align::EIGHT, ".offload_sizes");
+-
+-        builder.memcpy(
+-            alloc,
+-            Align::EIGHT,
+-            offload_sizes,
+-            Align::EIGHT,
+-            cx.get_const_i64(8 * args.len() as u64),
+-            MemFlags::empty(),
+-            None,
+-        );
+-
+-        alloc
+-    } else {
+-        offload_sizes
+-    };
+-
+     //%kernel_args = alloca %struct.__tgt_kernel_arguments, align 8
+     let a5 = builder.direct_alloca(tgt_kernel_decl, Align::EIGHT, "kernel_args");
+-
+-    // Step 1)
+     unsafe {
+         llvm::LLVMPositionBuilderAtEnd(&builder.llbuilder, bb);
+     }
+ 
+-    // Now we allocate once per function param, a copy to be passed to one of our maps.
+-    let mut vals = vec![];
+-    let mut geps = vec![];
+-    let i32_0 = cx.get_const_i32(0);
+-    for &v in args {
+-        let ty = cx.val_ty(v);
+-        let ty_kind = cx.type_kind(ty);
+-        let (base_val, gep_base) = match ty_kind {
+-            TypeKind::Pointer => (v, v),
+-            TypeKind::Half | TypeKind::Float | TypeKind::Double | TypeKind::Integer => {
+-                // FIXME(Sa4dUs): check for `f128` support, latest NVIDIA cards support it
+-                let num_bits = scalar_width(cx, ty);
+-
+-                let bb = builder.llbb();
+-                unsafe {
+-                    llvm::LLVMRustPositionBuilderPastAllocas(builder.llbuilder, builder.llfn());
+-                }
+-                let addr = builder.direct_alloca(cx.type_i64(), Align::EIGHT, "addr");
+-                unsafe {
+-                    llvm::LLVMPositionBuilderAtEnd(builder.llbuilder, bb);
+-                }
+-
+-                let cast = builder.bitcast(v, cx.type_ix(num_bits));
+-                let value = builder.zext(cast, cx.type_i64());
+-                builder.store(value, addr, Align::EIGHT);
+-                (value, addr)
+-            }
+-            other => bug!("offload does not support {other:?}"),
+-        };
+-
+-        let gep = builder.inbounds_gep(cx.type_f32(), gep_base, &[i32_0]);
+-
+-        vals.push(base_val);
+-        geps.push(gep);
+-    }
+-
+-    for i in 0..num_args {
+-        let idx = cx.get_const_i32(i);
+-        let gep1 = builder.inbounds_gep(ty, a1, &[i32_0, idx]);
+-        builder.store(vals[i as usize], gep1, Align::EIGHT);
+-        let gep2 = builder.inbounds_gep(ty, a2, &[i32_0, idx]);
+-        builder.store(geps[i as usize], gep2, Align::EIGHT);
+-
+-        if !matches!(metadata[i as usize].payload_size, OffloadSize::Static(_)) {
+-            let gep3 = builder.inbounds_gep(ty2, a4, &[i32_0, idx]);
+-            let size_val = get_runtime_size(builder, args, i as usize, &metadata[i as usize]);
+-            builder.store(size_val, gep3, Align::EIGHT);
+-        }
+-    }
+-
+-    // For now we have a very simplistic indexing scheme into our
+-    // offload_{baseptrs,ptrs,sizes}. We will probably improve this along with our gpu frontend pr.
+-    fn get_geps<'ll, 'tcx>(
+-        builder: &mut Builder<'_, 'll, 'tcx>,
+-        ty: &'ll Type,
+-        ty2: &'ll Type,
+-        a1: &'ll Value,
+-        a2: &'ll Value,
+-        a4: &'ll Value,
+-        is_dynamic: bool,
+-    ) -> [&'ll Value; 3] {
+-        let cx = builder.cx;
+-        let i32_0 = cx.get_const_i32(0);
+-
+-        let gep1 = builder.inbounds_gep(ty, a1, &[i32_0, i32_0]);
+-        let gep2 = builder.inbounds_gep(ty, a2, &[i32_0, i32_0]);
+-        let gep3 = if is_dynamic { builder.inbounds_gep(ty2, a4, &[i32_0, i32_0]) } else { a4 };
+-        [gep1, gep2, gep3]
+-    }
+-
+-    fn generate_mapper_call<'ll, 'tcx>(
+-        builder: &mut Builder<'_, 'll, 'tcx>,
+-        geps: [&'ll Value; 3],
+-        o_type: &'ll Value,
+-        fn_to_call: &'ll Value,
+-        fn_ty: &'ll Type,
+-        num_args: u64,
+-        s_ident_t: &'ll Value,
+-    ) {
+-        let cx = builder.cx;
+-        let nullptr = cx.const_null(cx.type_ptr());
+-        let i64_max = cx.get_const_i64(u64::MAX);
+-        let num_args = cx.get_const_i32(num_args);
+-        let args =
+-            vec![s_ident_t, i64_max, num_args, geps[0], geps[1], geps[2], o_type, nullptr, nullptr];
+-        builder.call(fn_ty, None, None, fn_to_call, ReturnSlot::Direct, &args, None, None);
+-    }
+-
+     // Step 2)
+     let s_ident_t = offload_globals.ident_t_global;
+     let geps = get_geps(builder, ty, ty2, a1, a2, a4, has_dynamic);
+@@ -709,6 +577,7 @@ fn generate_mapper_call<'ll, 'tcx>(
+ 
+     // Step 3)
+     // Here we fill the KernelArgsTy, see the documentation above
++    let i32_0 = cx.get_const_i32(0);
+     for (i, value) in values.iter().enumerate() {
+         let ptr = builder.inbounds_gep(tgt_kernel_decl, a5, &[i32_0, cx.get_const_i32(i as u64)]);
+         let name = std::ffi::CString::new(value.1).unwrap();
+diff --git a/compiler/rustc_codegen_llvm/src/intrinsic.rs b/compiler/rustc_codegen_llvm/src/intrinsic.rs
+index 454347a5e04..cd16b83617f 100644
+--- a/compiler/rustc_codegen_llvm/src/intrinsic.rs
++++ b/compiler/rustc_codegen_llvm/src/intrinsic.rs
+@@ -21,7 +21,7 @@
+ use rustc_middle::mir::BinOp;
+ use rustc_middle::ty::consts::ConstExt;
+ use rustc_middle::ty::layout::{FnAbiOf, HasTyCtxt, HasTypingEnv, LayoutOf};
+-use rustc_middle::ty::offload_meta::OffloadMetadata;
++use rustc_middle::ty::offload_meta::{MappingFlags, OffloadMetadata};
+ use rustc_middle::ty::{self, GenericArgsRef, Instance, SimdAlign, Ty, TyCtxt, TypingEnv};
+ use rustc_session::diagnostics::feature_err;
+ use rustc_span::{ErrorGuaranteed, Span, Symbol, bug, span_bug, sym};
+@@ -36,13 +36,17 @@
+ use crate::abi::FnAbiLlvmExt;
+ use crate::builder::Builder;
+ use crate::builder::autodiff::{adjust_activity_to_abi, generate_enzyme_call};
+-use crate::builder::gpu_offload::{self, OffloadKernelDims, declare_omp_get_num_devices};
++use crate::builder::gpu_offload::*;
++use crate::builder::gpu_offload::{
++    self, OffloadKernelDims, declare_omp_get_num_devices,
++};
+ use crate::context::CodegenCx;
+ use crate::declare::declare_raw_fn;
+ use crate::diagnostics::{
+     AutoDiffWithoutEnable, AutoDiffWithoutLto, IntrinsicSignatureMismatch, IntrinsicWrongArch,
+     OffloadWithoutEnable, OffloadWithoutFatLTO, UnknownIntrinsic,
+ };
++use crate::intrinsic::ty::offload_meta::OffloadSize;
+ use crate::intrinsic::ty::typetree::fnc_typetrees;
+ use crate::llvm::{self, Attribute, AttributePlace, Type, Value};
+ use crate::type_of::LayoutLlvmExt;
+@@ -229,6 +233,16 @@ fn codegen_intrinsic_call(
+             sym::autodiff => {
+                 return codegen_autodiff(self, instance, args, result_layout, result_place);
+             }
++
++            sym::offload_preload => {
++                codegen_offload_preload(self, tcx, instance, args);
++                return IntrinsicResult::WroteIntoPlace;
++            }
++
++            sym::offload_preload_end => {
++                codegen_offload_preload_drop(self, tcx, instance, args);
++                return IntrinsicResult::WroteIntoPlace;
++            }
+             sym::offload => {
+                 if tcx.sess.opts.unstable_opts.offload.is_empty() {
+                     let _ = tcx.dcx().emit_err(OffloadWithoutEnable);
+@@ -1918,6 +1932,179 @@ fn codegen_autodiff<'ll, 'tcx>(
+     )
+ }
+ 
++fn offload_bool_arg<'ll, 'tcx>(args: &[OperandRef<'tcx, &'ll llvm::Value>], idx: usize) -> bool {
++    let arg = &args[idx];
++
++    if !arg.layout.ty.is_bool() {
++        bug!("expected bool argument at index {idx}, got {:?}", arg.layout.ty);
++    }
++
++    let OperandValue::Immediate(v) = arg.val else {
++        bug!("expected immediate bool argument at index {idx}");
++    };
++
++    let Some(ci) = (unsafe { llvm::LLVMIsAConstantInt(v) }) else {
++        bug!("expected constant bool argument at index {idx}");
++    };
++
++    let mut raw = 0u64;
++    let ok = unsafe { llvm::LLVMRustConstIntGetZExtValue(ci, &mut raw) };
++
++    if !ok {
++        bug!("failed to extract constant bool argument at index {idx}");
++    }
++
++    raw != 0
++}
++
++fn codegen_offload_preload_drop<'ll, 'tcx>(
++    bx: &mut Builder<'_, 'll, 'tcx>,
++    tcx: TyCtxt<'tcx>,
++    _instance: ty::Instance<'tcx>,
++    args: &[OperandRef<'tcx, &'ll llvm::Value>],
++) {
++    let cx = bx.cx;
++    let ptr_arg = &args[0];
++    let is_mut: bool = offload_bool_arg(args, 1);
++
++    let pointee_ty = match *ptr_arg.layout.ty.kind() {
++        ty::RawPtr(pointee_ty, _) => pointee_ty,
++        _ => bug!("expected raw pointer argument"),
++    };
++
++    let ptr = match ptr_arg.val {
++        OperandValue::Immediate(ptr) => ptr,
++        _ => bug!("not handled"),
++    };
++
++    let args = vec![ptr];
++
++    let mut meta = OffloadMetadata::from_ty(tcx, pointee_ty);
++    // We end a mut Mapper. Unless the user never mutated a mut variable passed in a mutable way, we
++    // must return it from the device to update the host version. If they never mutated it, they
++    // surely got a clippy or rustc warning, so it's up to them for wasting time.
++    if is_mut {
++        meta.mode |= MappingFlags::FROM;
++    } else {
++        // We still want the refcounter to go down, so the runtime nows when it can free the data.
++        meta.mode |= MappingFlags::NONE;
++    }
++    let metadata: &[OffloadMetadata; 1] = &[meta];
++
++    let types: &Type = cx.layout_of(pointee_ty).llvm_type(cx);
++
++    let offload_globals_ref = cx.offload_globals.borrow();
++    let offload_globals = match offload_globals_ref.as_ref() {
++        Some(globals) => globals,
++        None => {
++            return;
++        }
++    };
++
++    let target_symbol = cx.generate_local_symbol_name("");
++    let offload_data =
++        gen_define_handling(&cx, metadata, target_symbol, offload_globals, TransferType::End);
++    let has_dynamic = metadata.iter().any(|m| !matches!(m.payload_size, OffloadSize::Static(_)));
++    let (ty, ty2, a1, a2, a4) = crate::builder::gpu_helper::preper_datatransfers(
++        bx,
++        &args,
++        &[types],
++        offload_data.offload_sizes,
++        metadata,
++        has_dynamic,
++    );
++    let geps = crate::builder::gpu_helper::get_geps(bx, ty, ty2, a1, a2, a4, has_dynamic);
++
++    crate::builder::gpu_helper::generate_mapper_call(
++        bx,
++        geps,
++        offload_data.memtransfer_end,
++        offload_globals.end_mapper,
++        offload_globals.mapper_fn_ty,
++        1,
++        offload_globals.ident_t_global,
++    );
++}
++
++// For each PreLoad *call*, we now use some of our previous declared globals to move data to the gpu.
++// For now, we only handle the data transfer part of it. Consecutive calls become a no-op on the
++// LLVM side.
++//
++// Current steps:
++// 0. Alloca some variables for the following steps
++// 1. set insert point before PreLoad call.
++// 2. generate all the GEPS and stores, to be used in 3)
++// 3. generate __tgt_target_data_begin calls to move data to the GPU
++//
++// unchanged: keep kernel call. Later move the kernel to the GPU
++//
++// 4. set insert point after kernel call.
++// 5. generate all the GEPS and stores, to be used in 6)
++// 6. generate __tgt_target_data_end calls to move data from the GPU
++fn codegen_offload_preload<'ll, 'tcx>(
++    bx: &mut Builder<'_, 'll, 'tcx>,
++    tcx: TyCtxt<'tcx>,
++    _instance: ty::Instance<'tcx>,
++    args: &[OperandRef<'tcx, &'ll Value>],
++) {
++    let cx = bx.cx;
++
++    let arg: &OperandRef<'_, &'ll Value> = &args[0];
++    let args = match arg.val {
++        OperandValue::Immediate(val) => vec![val],
++        _ => bug!("not yet handled"),
++    };
++
++    let arg_ty = arg.layout.ty;
++
++    let pointee_ty: Ty<'tcx> = match *arg_ty.kind() {
++        ty::RawPtr(pointee_ty, _) => pointee_ty,
++        _ => bug!("expected preload argument to be a raw pointer, got {arg_ty:?}"),
++    };
++
++    let meta = OffloadMetadata::from_ty(tcx, pointee_ty);
++    let metadata = &[meta];
++    let types = cx.layout_of(pointee_ty).llvm_type(cx);
++
++    let offload_globals_ref = cx.offload_globals.borrow();
++    let offload_globals = match offload_globals_ref.as_ref() {
++        Some(globals) => globals,
++        None => {
++            // Offload is not initialized, cannot continue
++            return;
++        }
++    };
++    let target_symbol = cx.generate_local_symbol_name("");
++    let offload_data =
++        gen_define_handling(&cx, metadata, target_symbol, offload_globals, TransferType::Begin);
++    let has_dynamic = metadata.iter().any(|m| !matches!(m.payload_size, OffloadSize::Static(_)));
++    let (ty, ty2, a1, a2, a4) = crate::builder::gpu_helper::preper_datatransfers(
++        bx,
++        &args,
++        &[types],
++        offload_data.offload_sizes,
++        metadata,
++        has_dynamic,
++    );
++    let geps = crate::builder::gpu_helper::get_geps(bx, ty, ty2, a1, a2, a4, has_dynamic);
++
++    crate::builder::gpu_helper::generate_mapper_call(
++        bx,
++        geps,
++        offload_data.memtransfer_begin,
++        offload_globals.begin_mapper,
++        offload_globals.mapper_fn_ty,
++        1,
++        offload_globals.ident_t_global,
++    );
++}
++
++pub(crate) enum TransferType {
++    Begin,
++    Kernel,
++    End,
++}
++
+ // Generates the LLVM code to offload a Rust function to a target device (e.g., GPU).
+ // For each kernel call, it generates the necessary globals (including metadata such as
+ // size and pass mode), manages memory mapping to and from the device, handles all
+@@ -1989,7 +2176,7 @@ fn codegen_offload<'ll, 'tcx>(
+         }
+     };
+     let offload_data =
+-        gpu_offload::gen_define_handling(&cx, &metadata, target_symbol, offload_globals);
++        gen_define_handling(&cx, &metadata, target_symbol, offload_globals, TransferType::Kernel);
+     gpu_offload::gen_call_handling(
+         bx,
+         &offload_data,
+diff --git a/compiler/rustc_hir_analysis/src/check/intrinsic.rs b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
+index b566f6b04bf..b411062b623 100644
+--- a/compiler/rustc_hir_analysis/src/check/intrinsic.rs
++++ b/compiler/rustc_hir_analysis/src/check/intrinsic.rs
+@@ -154,6 +154,8 @@ fn intrinsic_operation_unsafety(tcx: TyCtxt<'_>, intrinsic_id: LocalDefId) -> hi
+         | sym::non_exhaustive
+         | sym::offload
+         | sym::offload_get_num_devices
++        | sym::offload_preload
++        | sym::offload_preload_end
+         | sym::offset_of
+         | sym::overflow_checks
+         | sym::powf16
+@@ -393,6 +395,9 @@ pub(crate) fn check_intrinsic_type(
+             param(2),
+         ),
+         sym::offload_get_num_devices => (0, 0, vec![], tcx.types.i32),
++        sym::offload_preload | sym::offload_preload_end => {
++            (1, 0, vec![Ty::new_imm_ptr(tcx, param(0)), tcx.types.bool], tcx.types.unit)
++        }
+         sym::offset => (2, 0, vec![param(0), param(1)], param(0)),
+         sym::arith_offset => (
+             1,
+diff --git a/compiler/rustc_span/src/symbol.rs b/compiler/rustc_span/src/symbol.rs
+index e3fcc6813b9..21f1ea1b77c 100644
+--- a/compiler/rustc_span/src/symbol.rs
++++ b/compiler/rustc_span/src/symbol.rs
+@@ -1492,6 +1492,8 @@
+         off,
+         offload,
+         offload_get_num_devices,
++        offload_preload,
++        offload_preload_end,
+         offload_kernel,
+         offload_region,
+         offset,
+diff --git a/library/core/src/intrinsics/mod.rs b/library/core/src/intrinsics/mod.rs
+index ecc8b66ec57..2058b056b90 100644
+--- a/library/core/src/intrinsics/mod.rs
++++ b/library/core/src/intrinsics/mod.rs
+@@ -3826,6 +3826,14 @@ pub const fn offload<F, T: crate::marker::Tuple, R>(
+ #[rustc_intrinsic]
+ pub const fn offload_get_num_devices() -> i32;
+ 
++#[rustc_intrinsic]
++#[rustc_nounwind]
++pub fn offload_preload<T: ?Sized>(ptr: *const T, is_mut: bool);
++
++#[rustc_intrinsic]
++#[rustc_nounwind]
++pub fn offload_preload_end<T: ?Sized>(ptr: *const T, is_mut: bool);
++
+ /// Inform Miri that a given pointer definitely has a certain alignment.
+ #[cfg(miri)]
+ #[rustc_allow_const_fn_unstable(const_eval_select)]
+diff --git a/library/core/src/offload/mod.rs b/library/core/src/offload/mod.rs
+index aefe3a4eb16..534f71937d5 100644
+--- a/library/core/src/offload/mod.rs
++++ b/library/core/src/offload/mod.rs
+@@ -336,3 +336,63 @@ pub trait DefaultLaunchCheck {
+ impl<T: ?Sized> DefaultLaunchCheck for &T {
+     fn __offload_check_launch(&self, _grid: [u32; 3], _block: [u32; 3]) {}
+ }
++use crate::marker::PhantomData;
++
++// We store a raw pointer instead of a reference, since the real location of the data will be on a
++// GPU, at a different address. We only use the CPU pointer as a key to our runtime cpu-gpu pointer
++// map. In the future we might even directly store the gpu ptr here, which would make it even
++// clearer why we are using raw pointers instead of references.
++// We still use a lifetime marker to prevent writes into the original cpu version of the object,
++// while the data is on the gpu. Dropping this struct will inform the runtime that this pointer can
++// no longer be used to access the gpu copy of the data. If the reference counter reaches zero, the
++// runtime might delete the gpu copy of the preloaded value.
++#[unstable(feature = "offload", issue = "124509")]
++#[derive(Debug)]
++pub struct Preload<'a, T: ?Sized> {
++    cpu_ptr: *const T,
++    _marker: PhantomData<&'a T>,
++}
++
++// We store a raw pointer instead of a reference, since the real location of the data will be on a
++// GPU, at a different address. We only use the CPU pointer as a key to our runtime cpu-gpu pointer
++// map. In the future we might even directly store the gpu ptr here, which would make it even
++// clearer why we are using raw pointers instead of references.
++// We still use a lifetime marker to prevent writes into the original cpu version of the object,
++// while the data is on the gpu. Dropping this struct will force a copy of the data back from the
++// gpu to the cpu, after which we can again safely use the original mutable reference.
++#[unstable(feature = "offload", issue = "124509")]
++#[derive(Debug)]
++pub struct PreloadMut<'a, T: ?Sized> {
++    cpu_ptr: *mut T,
++    _marker: PhantomData<&'a mut T>,
++}
++
++#[unstable(feature = "offload", issue = "124509")]
++pub fn preload<'a, T: ?Sized>(x: &'a T) -> Preload<'a, T> {
++    let p = Preload { cpu_ptr: x as *const T, _marker: PhantomData };
++
++    core::intrinsics::offload_preload(p.cpu_ptr, false);
++
++    p
++}
++
++#[unstable(feature = "offload", issue = "124509")]
++pub fn preload_mut<'a, T: ?Sized>(x: &'a mut T) -> PreloadMut<'a, T> {
++    let p = PreloadMut { cpu_ptr: x as *mut T, _marker: PhantomData };
++
++    core::intrinsics::offload_preload(p.cpu_ptr, true);
++
++    p
++}
++
++impl<T: ?Sized> Drop for PreloadMut<'_, T> {
++    fn drop(&mut self) {
++        core::intrinsics::offload_preload_end(self.cpu_ptr, true);
++    }
++}
++
++impl<T: ?Sized> Drop for Preload<'_, T> {
++    fn drop(&mut self) {
++        core::intrinsics::offload_preload_end(self.cpu_ptr, false);
++    }
++}
+diff --git a/tests/codegen-llvm/gpu_offload/explicit_memtransfer.rs b/tests/codegen-llvm/gpu_offload/explicit_memtransfer.rs
+new file mode 100644
+index 00000000000..dd2a85f9e62
+--- /dev/null
++++ b/tests/codegen-llvm/gpu_offload/explicit_memtransfer.rs
+@@ -0,0 +1,28 @@
++#![feature(abi_gpu_kernel, gpu_offload, offload)]
++#![no_std]
++
++use core::offload::offload::*;
++
++#[cfg(target_os = "linux")]
++#[unsafe(no_mangle)]
++fn main() {
++    //println!("Hello, world!");
++    let mut x = [1234.0f64; 256];
++    let p: PreloadMut<[f64; 256]> = preload_mut(&mut x);
++    // The next line does not compile
++    //let p2: PreloadMut<[f64; 256]> = preload_mut(&mut x);
++    core::hint::black_box(p);
++    let y = [1234.0f64; 128];
++    let q: Preload<[f64; 128]> = preload(&y);
++    let r: Preload<[f64; 128]> = preload(&y);
++    core::hint::black_box(&q);
++    core::hint::black_box(&r);
++    core::hint::black_box(&q);
++}
++
++use core::offload::offload_kernel;
++
++//#[offload_kernel]
++//fn foo(a: &[f32], b: &[f32], c: *mut f32) {
++//    unsafe { *c = a[0] + b[0] };
++//}
+-- 
+2.43.0
+

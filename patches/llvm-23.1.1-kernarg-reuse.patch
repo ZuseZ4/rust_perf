@@ -1,0 +1,245 @@
+diff --git a/offload/plugins-nextgen/amdgpu/src/rtl.cpp b/offload/plugins-nextgen/amdgpu/src/rtl.cpp
+index f1caee0c4c1e2..f98aa669e0781 100644
+--- a/offload/plugins-nextgen/amdgpu/src/rtl.cpp
++++ b/offload/plugins-nextgen/amdgpu/src/rtl.cpp
+@@ -14,7 +14,10 @@
+ #include <cassert>
+ #include <cstddef>
+ #include <cstdint>
++#include <cstdlib>
+ #include <deque>
++#include <limits>
++#include <optional>
+ #include <functional>
+ #include <mutex>
+ #include <string>
+@@ -830,7 +833,8 @@ struct AMDGPUQueueTy {
+                          uint32_t NumThreads[3], uint32_t NumBlocks[3],
+                          uint32_t GroupSize, uint64_t StackSize,
+                          AMDGPUSignalTy *OutputSignal,
+-                         AMDGPUSignalTy *InputSignal) {
++                         AMDGPUSignalTy *InputSignal,
++                         bool InputIsQueueKernel = false) {
+     assert(OutputSignal && "Invalid kernel output signal");
+ 
+     // Lock the queue during the packet publishing process. Notice this blocks
+@@ -844,9 +848,18 @@ struct AMDGPUQueueTy {
+     // subsequent queue's packets until the barrier input signal are satisfied.
+     // No need output signal needed because the dependency is already guaranteed
+     // by the queue barrier itself.
+-    if (InputSignal && InputSignal->load())
+-      if (auto Err = pushBarrierImpl(nullptr, InputSignal))
++    // When the pending operation is the preceding dispatch of this very queue,
++    // the packet's barrier bit expresses the dependency: the packet processor
++    // waits for all earlier packets in order, without the completion-signal
++    // round trip a barrier packet needs. That round trip left the GPU idle for
++    // ~7-10us before every dependent kernel; HIP uses the barrier bit as well.
++    bool BarrierBit = false;
++    if (InputSignal && InputSignal->load()) {
++      if (InputIsQueueKernel)
++        BarrierBit = true;
++      else if (auto Err = pushBarrierImpl(nullptr, InputSignal))
+         return Err;
++    }
+ 
+     // Now prepare the kernel packet.
+     uint64_t PacketId;
+@@ -875,7 +888,7 @@ struct AMDGPUQueueTy {
+     Packet->completion_signal = OutputSignal->get();
+ 
+     // Publish the packet. Do not modify the packet after this point.
+-    publishKernelPacket(PacketId, Setup, Packet);
++    publishKernelPacket(PacketId, Setup, Packet, BarrierBit);
+ 
+     return Plugin::success();
+   }
+@@ -953,10 +966,15 @@ private:
+   /// the kernel launch. Do not modify the packet once this function is called.
+   /// Assumes the queue lock is acquired.
+   void publishKernelPacket(uint64_t PacketId, uint16_t Setup,
+-                           hsa_kernel_dispatch_packet_t *Packet) {
++                           hsa_kernel_dispatch_packet_t *Packet,
++                           bool BarrierBit = false) {
+     uint32_t *PacketPtr = reinterpret_cast<uint32_t *>(Packet);
+ 
+     uint16_t Header = HSA_PACKET_TYPE_KERNEL_DISPATCH << HSA_PACKET_HEADER_TYPE;
++    // Barrier bit (HSA_PACKET_HEADER_BARRIER, bit 8 of the header); the
++    // bundled dynamic_hsa header does not declare the enumerator.
++    if (BarrierBit)
++      Header |= 1 << 8;
+     Header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_ACQUIRE_FENCE_SCOPE;
+     Header |= HSA_FENCE_SCOPE_SYSTEM << HSA_PACKET_HEADER_RELEASE_FENCE_SCOPE;
+ 
+@@ -1170,6 +1188,46 @@ private:
+   /// operation that was already finalized in a previous stream sycnhronize.
+   uint32_t SyncCycle;
+ 
++  /// Kernel-argument buffers of launches that may still be in flight, as
++  /// (slot, buffer). Releasing them used to be a post action that only runs at
++  /// complete(), so a stream with many queued launches allocated a fresh HSA
++  /// buffer per launch (~35us each on MI250X). They are handed back to the
++  /// manager as soon as their slot's signal has fired instead.
++  std::deque<std::pair<uint32_t, void *>> InFlightKernelArgs;
++  AMDGPUMemoryManagerTy *KernelArgsManager = nullptr;
++
++  /// Whether the last consumed slot is a kernel dispatch on this stream's HSA
++  /// queue; then the next dispatch can depend on it through the barrier bit.
++  bool LastOpIsQueueKernel = false;
++  /// LIBOMPTARGET_AMDGPU_MAX_INFLIGHT_LAUNCHES: in-flight launches kept per
++  /// stream before a launch waits for the oldest one (0 disables the cap). A
++  /// busy stream pushes a barrier plus a dispatch packet per launch, so 128
++  /// keeps the default 512-entry AQL queue from ever filling up; the
++  /// queue-full spin in acquirePacket hangs sporadically and crashes under
++  /// rocprofv3's intercept queue.
++  static size_t maxInFlightKernelArgs() {
++    static const size_t Value = [] {
++      const char *Env = std::getenv("LIBOMPTARGET_AMDGPU_MAX_INFLIGHT_LAUNCHES");
++      return Env ? static_cast<size_t>(std::strtoul(Env, nullptr, 10)) : 128;
++    }();
++    return Value;
++  }
++
++  /// Release the kernel-argument buffers of finished launches: all recorded
++  /// ones up to \p UntilSlot if given, otherwise those whose signal reached
++  /// zero. The stream mutex must be held.
++  Error releaseKernelArgs(std::optional<uint32_t> UntilSlot = std::nullopt) {
++    while (!InFlightKernelArgs.empty()) {
++      auto [Slot, Buffer] = InFlightKernelArgs.front();
++      if (UntilSlot ? Slot > *UntilSlot : Slots[Slot].Signal->load() != 0)
++        break;
++      InFlightKernelArgs.pop_front();
++      if (auto Err = KernelArgsManager->deallocate(Buffer))
++        return Err;
++    }
++    return Plugin::success();
++  }
++
+   /// Mutex to protect stream's management.
+   mutable std::mutex Mutex;
+ 
+@@ -1204,6 +1262,9 @@ private:
+   /// and releases them once the slot is no longer used, the function requires
+   /// an idle signal for the new consumed slot.
+   std::pair<uint32_t, AMDGPUSignalTy *> consume(AMDGPUSignalTy *OutputSignal) {
++    // Every operation goes through here; a kernel push sets this again.
++    LastOpIsQueueKernel = false;
++
+     // Double the stream size if needed. Since we use std::deque, this operation
+     // does not invalidate the already added slots.
+     if (Slots.size() == NextSlot)
+@@ -1231,11 +1292,20 @@ private:
+     Slots[Slot].Callbacks.clear();
+     Slots[Slot].ActionArgs.clear();
+     --NextSlot;
++
++    if (!InFlightKernelArgs.empty() && InFlightKernelArgs.back().first == Slot) {
++      if (auto Err = KernelArgsManager->deallocate(InFlightKernelArgs.back().second))
++        consumeError(std::move(Err));
++      InFlightKernelArgs.pop_back();
++    }
+   }
+ 
+   /// Complete all pending post actions and reset the stream after synchronizing
+   /// or positively querying the stream.
+   Error complete() {
++    if (auto Err = releaseKernelArgs(std::numeric_limits<uint32_t>::max()))
++      return Err;
++
+     for (uint32_t Slot = 0; Slot < NextSlot; ++Slot) {
+       // Take the post action of the operation if any.
+       if (auto Err = Slots[Slot].performAction())
+@@ -1261,6 +1331,9 @@ private:
+   /// Complete pending post actions until and including the event in target
+   /// slot.
+   Error completeUntil(uint32_t TargetSlot) {
++    if (auto Err = releaseKernelArgs(TargetSlot))
++      return Err;
++
+     for (uint32_t Slot = 0; Slot <= TargetSlot; ++Slot) {
+       // Take the post action of the operation if any.
+       if (auto Err = Slots[Slot].performAction())
+@@ -1414,11 +1487,13 @@ public:
+     std::lock_guard<std::mutex> StreamLock(Mutex);
+ 
+     // Consume stream slot and compute dependencies.
++    const bool InputIsQueueKernel = LastOpIsQueueKernel;
+     auto [Curr, InputSignal] = consume(OutputSignal);
+ 
+-    // Setup the post action to release the kernel args buffer.
+-    if (auto Err = Slots[Curr].schedReleaseBuffer(KernelArgs, MemoryManager))
+-      return Err;
++    // Track the kernel args buffer; it goes back to the manager once this
++    // slot's signal fires (releaseKernelArgs) rather than at complete().
++    KernelArgsManager = &MemoryManager;
++    InFlightKernelArgs.emplace_back(Curr, KernelArgs);
+ 
+     // If we are running an RPC server we want to wake up the server thread
+     // whenever there is a kernel running and let it sleep otherwise.
+@@ -1428,8 +1503,10 @@ public:
+     // Push the kernel with the output signal and an input signal (optional)
+     if (auto Err = Queue->pushKernelLaunch(Kernel, KernelArgs, NumThreads,
+                                            NumBlocks, GroupSize, StackSize,
+-                                           OutputSignal, InputSignal))
++                                           OutputSignal, InputSignal,
++                                           InputIsQueueKernel))
+       return Err;
++    LastOpIsQueueKernel = true;
+ 
+     // Register a callback to indicate when the kernel is complete.
+     if (Device.getRPCServer()) {
+@@ -1683,6 +1760,26 @@ public:
+   }
+ 
+   /// Synchronize with the stream. The current thread waits until all operations
++  /// Return the kernel-argument buffers of finished launches to their manager
++  /// so that the next allocation is served from its free list.
++  Error reclaimKernelArgs() {
++    std::lock_guard<std::mutex> Lock(Mutex);
++
++    // Bound the number of launches in flight, like the CUDA driver's launch
++    // queue does: beyond the cap, wait for the oldest launch so its buffer can
++    // be reused. This keeps the number of distinct buffers (and HSA
++    // allocations) at the cap and also keeps the host from overrunning the
++    // AQL queue.
++    const size_t Cap = maxInFlightKernelArgs();
++    if (Cap && InFlightKernelArgs.size() >= Cap) {
++      uint32_t Oldest = InFlightKernelArgs.front().first;
++      if (auto Err =
++              Slots[Oldest].Signal->wait(StreamBusyWaitMicroseconds, &Device))
++        return Err;
++    }
++    return releaseKernelArgs();
++  }
++
+   /// are finalized and it performs the pending post actions (i.e., releasing
+   /// intermediate buffers).
+   Error synchronize() {
+@@ -4240,6 +4337,16 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
+   AMDHostDeviceTy &HostDevice = AMDGPUPlugin.getHostDevice();
+   AMDGPUMemoryManagerTy &ArgsMemoryManager = HostDevice.getArgsMemoryManager();
+ 
++  AMDGPUDeviceTy &AMDGPUDevice = static_cast<AMDGPUDeviceTy &>(GenericDevice);
++
++  AMDGPUStreamTy *Stream = nullptr;
++  if (auto Err = AMDGPUDevice.getStream(AsyncInfoWrapper, Stream))
++    return Err;
++  // Hand back the args buffers of finished launches first so this allocation
++  // is served from the manager's free list instead of a new HSA allocation.
++  if (auto Err = Stream->reclaimKernelArgs())
++    return Err;
++
+   void *AllArgs = nullptr;
+   if (auto Err = ArgsMemoryManager.allocate(ArgsSize, &AllArgs))
+     return Err;
+@@ -4271,11 +4378,6 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
+     ExplicitEnd = Offset + Size;
+   }
+ 
+-  AMDGPUDeviceTy &AMDGPUDevice = static_cast<AMDGPUDeviceTy &>(GenericDevice);
+-
+-  AMDGPUStreamTy *Stream = nullptr;
+-  if (auto Err = AMDGPUDevice.getStream(AsyncInfoWrapper, Stream))
+-    return Err;
+ 
+   uint64_t ImplArgsOffset =
+       llvm::alignTo(ExplicitEnd, alignof(hsa_utils::AMDGPUImplicitArgsTy));

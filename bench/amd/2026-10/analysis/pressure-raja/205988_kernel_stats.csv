@@ -1,0 +1,4 @@
+"Name","Calls","TotalDurationNs","AverageNs","Percentage","MinNs","MaxNs","StdDev"
+"void rajaperf::apps::pressurecalc2<256ul>(double*, double*, double*, double*, double, double, double, long)",700,20738525,29626.464286,68.69,27841,30401,324.881477
+"void rajaperf::apps::pressurecalc1<256ul>(double*, double*, double, long)",700,9431737,13473.910000,31.24,12480,16960,352.815156
+"void rajaperf::basic::daxpy<256ul>(double*, double*, double, long)",1,22880,22880.000000,0.0758,22880,22880,0.00000000e+00

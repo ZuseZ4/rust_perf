@@ -1,0 +1,10 @@
+Min Runtime Report (sec.)  ,  ,  ,  , 
+Variant                 , Base_CUDA , RAJA_CUDA , RAJA_CUDA  , RAJA_CUDA 
+Tuning                  , block_256 , block_256 , kernel_256 , launch_256
+Apps_DEL_DOT_VEC_2D     ,  0.002049 ,  0.002047 ,    Not run ,    Not run
+Apps_ENERGY             ,  0.009768 ,  0.009771 ,    Not run ,    Not run
+Apps_FIR                ,  0.001263 ,  0.001253 ,    Not run ,    Not run
+Apps_LTIMES             ,  0.006099 ,   Not run ,   0.006211 ,   0.006110
+Apps_MATVEC_3D_STENCIL  ,  0.006113 ,  0.005391 ,    Not run ,    Not run
+Apps_PRESSURE           ,  0.012642 ,  0.013069 ,    Not run ,    Not run
+Apps_VOL3D              ,  0.001779 ,  0.001677 ,    Not run ,    Not run

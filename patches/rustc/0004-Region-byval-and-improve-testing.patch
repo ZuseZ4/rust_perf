@@ -1,0 +1,439 @@
+From 24f8bf013e2868776d85669ccca7b8f905c9533a Mon Sep 17 00:00:00 2001
+From: Marcelo Dominguez <dmmarcelo27@gmail.com>
+Date: Sat, 5 Sep 2026 13:38:07 +0300
+Subject: [PATCH 4/9] Region byval and improve testing
+
+---
+ compiler/rustc_hir_typeck/src/intrinsicck.rs  | 21 +++++++++-
+ compiler/rustc_middle/src/ty/offload_meta.rs  | 12 ++++--
+ library/core/src/offload/mod.rs               | 16 ++++---
+ .../auxiliary/offload_strategies.rs           | 26 ++++++++++++
+ tests/codegen-llvm/gpu_offload/region_host.rs | 34 ++++-----------
+ .../offload/auxiliary/offload_strategies.rs   | 26 ++++++++++++
+ tests/ui/offload/region_borrow.rs             | 22 ++++++++++
+ tests/ui/offload/region_borrow.stderr         | 15 +++++++
+ tests/ui/offload/region_by_ref.rs             | 42 +++++++++++++++++++
+ tests/ui/offload/region_by_ref.stderr         | 14 +++++++
+ tests/ui/offload/region_not_copy.rs           | 19 +++++++++
+ tests/ui/offload/region_not_copy.stderr       | 13 ++++++
+ 12 files changed, 225 insertions(+), 35 deletions(-)
+ create mode 100644 tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs
+ create mode 100644 tests/ui/offload/auxiliary/offload_strategies.rs
+ create mode 100644 tests/ui/offload/region_borrow.rs
+ create mode 100644 tests/ui/offload/region_borrow.stderr
+ create mode 100644 tests/ui/offload/region_by_ref.rs
+ create mode 100644 tests/ui/offload/region_by_ref.stderr
+ create mode 100644 tests/ui/offload/region_not_copy.rs
+ create mode 100644 tests/ui/offload/region_not_copy.stderr
+
+diff --git a/compiler/rustc_hir_typeck/src/intrinsicck.rs b/compiler/rustc_hir_typeck/src/intrinsicck.rs
+index d2432a7e39a..7733bd7d172 100644
+--- a/compiler/rustc_hir_typeck/src/intrinsicck.rs
++++ b/compiler/rustc_hir_typeck/src/intrinsicck.rs
+@@ -6,6 +6,7 @@
+ use rustc_hir as hir;
+ use rustc_index::Idx;
+ use rustc_middle::ty::layout::{LayoutError, SizeSkeleton};
++use rustc_middle::ty::offload_meta::is_region_ty;
+ use rustc_middle::ty::{self, Ty, TyCtxt, Unnormalized};
+ use rustc_span::def_id::LocalDefId;
+ use rustc_span::{ErrorGuaranteed, bug};
+@@ -134,6 +135,10 @@ fn check_transmute<'tcx>(
+     }
+ }
+ 
++fn is_offload_region_ref<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
++    matches!(ty.kind(), ty::Ref(_, inner, _) if is_region_ty(tcx, *inner))
++}
++
+ fn check_offload<'tcx>(
+     tcx: TyCtxt<'tcx>,
+     typing_env: ty::TypingEnv<'tcx>,
+@@ -205,7 +210,21 @@ fn check_offload<'tcx>(
+     {
+         let norm_input_ty = normalize(input_ty);
+         let norm_arg_ty = normalize(arg_ty);
+-        if norm_input_ty != norm_arg_ty {
++        
++        if is_offload_region_ref(tcx, norm_input_ty) || is_offload_region_ref(tcx, norm_arg_ty) {
++            let err = tcx
++                .sess
++                .dcx()
++                .struct_span_err(
++                    span,
++                    format!(
++                        "offload kernel argument {i} is a reference to a `Region`. Pass the \
++                        `Region` by value so it can be mapped like a slice"
++                    ),
++                )
++                .emit();
++            result = Err(err);
++        } else if norm_input_ty != norm_arg_ty {
+             let guar = tcx
+                 .sess
+                 .dcx()
+diff --git a/compiler/rustc_middle/src/ty/offload_meta.rs b/compiler/rustc_middle/src/ty/offload_meta.rs
+index c689c67397b..c51220912eb 100644
+--- a/compiler/rustc_middle/src/ty/offload_meta.rs
++++ b/compiler/rustc_middle/src/ty/offload_meta.rs
+@@ -94,10 +94,16 @@ pub fn handle_abi<'tcx, C>(
+     }
+ }
+ 
++pub fn is_region_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
++    matches!(
++        ty.kind(),
++        ty::Adt(def, _) if Some(def.did()) == tcx.get_diagnostic_item(sym::offload_region)
++    )
++}
++
+ fn region_element_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+-    if let ty::Adt(def, args) = ty.kind()
+-        && Some(def.did()) == tcx.get_diagnostic_item(sym::offload_region)
+-    {
++    if is_region_ty(tcx, ty) {
++        let ty::Adt(_, args) = ty.kind() else { unreachable!() };
+         Some(args.type_at(1))
+     } else {
+         None
+diff --git a/library/core/src/offload/mod.rs b/library/core/src/offload/mod.rs
+index d0854e67229..33d69ceb37d 100644
+--- a/library/core/src/offload/mod.rs
++++ b/library/core/src/offload/mod.rs
+@@ -133,7 +133,7 @@ macro_rules! offload {
+ /// # Safety
+ ///
+ /// Implementations must guarantee that generated views are disjoint.
+-#[unstable(feature = "offload", issue = "124509")]
++#[unstable(feature = "offload", issue = "131513")]
+ pub unsafe trait PartitioningStrategy {
+     /// Read-only view type for the partitioned memory region.
+     type View<'a, T: 'a>;
+@@ -163,8 +163,8 @@ pub unsafe trait PartitioningStrategy {
+ }
+ 
+ /// A memory region bound to a partitioning strategy.
+-#[derive(Copy, Clone, Debug)]
+-#[unstable(feature = "offload", issue = "124509")]
++#[derive(Debug)]
++#[unstable(feature = "offload", issue = "131513")]
+ #[rustc_diagnostic_item = "offload_region"]
+ pub struct Region<'a, T, S: PartitioningStrategy> {
+     ptr: *mut T,
+@@ -174,7 +174,7 @@ pub struct Region<'a, T, S: PartitioningStrategy> {
+ 
+ /// Raw representation used to build a [`Region`] from common aggregate types.
+ #[derive(Debug)]
+-#[unstable(feature = "offload", issue = "124509")]
++#[unstable(feature = "offload", issue = "131513")]
+ pub struct RawRegion<'a, T> {
+     ptr: *mut T,
+     len: usize,
+@@ -193,7 +193,7 @@ fn from(data: &'a mut [T]) -> Self {
+     }
+ }
+ 
+-#[unstable(feature = "offload", issue = "124509")]
++#[unstable(feature = "offload", issue = "131513")]
+ impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
+     /// Creates a new partitioned region from data convertible into a [`RawRegion`].
+     pub fn new<D>(data: D) -> Self
+@@ -216,4 +216,10 @@ pub fn get_mut(&mut self) -> Option<S::ViewMut<'_, T>> {
+         // The strategy guarantees that the returned view is disjoint.
+         unsafe { S::get_mut(self.ptr, self.len) }
+     }
++
++    /// Reborrows the region, producing a new region that aliases the same memory with
++    /// the lifetime of the borrow.
++    pub fn reborrow(&mut self) -> Region<'_, T, S> {
++        Region { ptr: self.ptr, len: self.len, _marker: core::marker::PhantomData }
++    }
+ }
+diff --git a/tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs b/tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs
+new file mode 100644
+index 00000000000..1e3271e5a85
+--- /dev/null
++++ b/tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs
+@@ -0,0 +1,26 @@
++//@ edition: 2024
++
++#![feature(gpu_offload)]
++#![feature(offload)]
++
++use core::offload::PartitioningStrategy;
++
++#[derive(Debug, Clone, Copy)]
++pub struct Dummy;
++
++unsafe impl PartitioningStrategy for Dummy {
++    type View<'a, T: 'a> = &'a T;
++    type ViewMut<'a, T: 'a> = &'a mut T;
++
++    fn index() -> usize {
++        0
++    }
++
++    unsafe fn get<'a, T>(_ptr: *const T, _len: usize) -> Option<Self::View<'a, T>> {
++        None
++    }
++
++    unsafe fn get_mut<'a, T>(_ptr: *mut T, _len: usize) -> Option<Self::ViewMut<'a, T>> {
++        None
++    }
++}
+diff --git a/tests/codegen-llvm/gpu_offload/region_host.rs b/tests/codegen-llvm/gpu_offload/region_host.rs
+index 602dc247f65..975096c7fb5 100644
+--- a/tests/codegen-llvm/gpu_offload/region_host.rs
++++ b/tests/codegen-llvm/gpu_offload/region_host.rs
+@@ -1,6 +1,8 @@
+ //@ compile-flags: -Zoffload=Test -Zunstable-options -C opt-level=1 -Clto=fat
+ //@ no-prefer-dynamic
+ //@ needs-offload
++//@ edition: 2024
++//@ aux-crate: offload_strategies=offload_strategies.rs
+ 
+ // This test verifies that a `Region` kernel argument is mapped like a slice.
+ #![feature(abi_gpu_kernel)]
+@@ -12,26 +14,9 @@
+ 
+ extern crate core;
+ 
+-use core::offload::{PartitioningStrategy, Region};
++use core::offload::Region;
+ 
+-struct Dummy;
+-
+-unsafe impl PartitioningStrategy for Dummy {
+-    type View<'a, T: 'a> = &'a T;
+-    type ViewMut<'a, T: 'a> = &'a mut T;
+-
+-    fn index() -> usize {
+-        0
+-    }
+-
+-    unsafe fn get<'a, T>(_ptr: *const T, _len: usize) -> Option<Self::View<'a, T>> {
+-        None
+-    }
+-
+-    unsafe fn get_mut<'a, T>(_ptr: *mut T, _len: usize) -> Option<Self::ViewMut<'a, T>> {
+-        None
+-    }
+-}
++use offload_strategies::Dummy;
+ 
+ // CHECK: @anon.[[ID:.*]].0 = private unnamed_addr constant [23 x i8] c";unknown;unknown;0;0;;\00", align 1
+ 
+@@ -51,13 +36,10 @@ unsafe fn get_mut<'a, T>(_ptr: *mut T, _len: usize) -> Option<Self::ViewMut<'a,
+ #[unsafe(no_mangle)]
+ fn main() {
+     let mut x = [0.0f32; 4];
+-    core::intrinsics::offload::<_, _, ()>(
+-        foo,
+-        [1, 1, 1],
+-        [1, 1, 1],
+-        0,
+-        (Region::<f32, Dummy>::new(&mut x as &mut [f32]),),
+-    );
++    core::offload::offload! {
++        kernel = foo,
++        args = (Region::<f32, Dummy>::new(&mut x as &mut [f32]),),
++    };
+ }
+ 
+ fn foo(region: Region<'_, f32, Dummy>) {
+diff --git a/tests/ui/offload/auxiliary/offload_strategies.rs b/tests/ui/offload/auxiliary/offload_strategies.rs
+new file mode 100644
+index 00000000000..1e3271e5a85
+--- /dev/null
++++ b/tests/ui/offload/auxiliary/offload_strategies.rs
+@@ -0,0 +1,26 @@
++//@ edition: 2024
++
++#![feature(gpu_offload)]
++#![feature(offload)]
++
++use core::offload::PartitioningStrategy;
++
++#[derive(Debug, Clone, Copy)]
++pub struct Dummy;
++
++unsafe impl PartitioningStrategy for Dummy {
++    type View<'a, T: 'a> = &'a T;
++    type ViewMut<'a, T: 'a> = &'a mut T;
++
++    fn index() -> usize {
++        0
++    }
++
++    unsafe fn get<'a, T>(_ptr: *const T, _len: usize) -> Option<Self::View<'a, T>> {
++        None
++    }
++
++    unsafe fn get_mut<'a, T>(_ptr: *mut T, _len: usize) -> Option<Self::ViewMut<'a, T>> {
++        None
++    }
++}
+diff --git a/tests/ui/offload/region_borrow.rs b/tests/ui/offload/region_borrow.rs
+new file mode 100644
+index 00000000000..d1424d1cde3
+--- /dev/null
++++ b/tests/ui/offload/region_borrow.rs
+@@ -0,0 +1,22 @@
++//@ edition: 2024
++//@ aux-crate: offload_strategies=offload_strategies.rs
++
++// This test checks that the borrow checker errors when writing into the data a
++// `Region` was created from while the `Region` is still alive.
++
++#![feature(gpu_offload)]
++#![feature(offload)]
++#![allow(unused_assignments)]
++
++use core::offload::Region;
++use offload_strategies::Dummy;
++
++fn main() {
++    let mut x = [0.0f32; 4];
++    let region = Region::<f32, Dummy>::new(&mut x[..]);
++
++    x[0] = 1.0;
++    //~^ ERROR cannot assign to `x[_]` because it is borrowed
++
++    let _view = region.get();
++}
+diff --git a/tests/ui/offload/region_borrow.stderr b/tests/ui/offload/region_borrow.stderr
+new file mode 100644
+index 00000000000..4f7a153bf30
+--- /dev/null
++++ b/tests/ui/offload/region_borrow.stderr
+@@ -0,0 +1,15 @@
++error[E0506]: cannot assign to `x[_]` because it is borrowed
++  --> $DIR/region_borrow.rs:18:5
++   |
++LL |     let region = Region::<f32, Dummy>::new(&mut x[..]);
++   |                                                 - `x[_]` is borrowed here
++LL |
++LL |     x[0] = 1.0;
++   |     ^^^^^^^^^^ `x[_]` is assigned to here but it was already borrowed
++...
++LL |     let _view = region.get();
++   |                 ------ borrow later used here
++
++error: aborting due to 1 previous error
++
++For more information about this error, try `rustc --explain E0506`.
+diff --git a/tests/ui/offload/region_by_ref.rs b/tests/ui/offload/region_by_ref.rs
+new file mode 100644
+index 00000000000..8bdc9281552
+--- /dev/null
++++ b/tests/ui/offload/region_by_ref.rs
+@@ -0,0 +1,42 @@
++//@ compile-flags: -Zunstable-options -Zoffload=Device -Clto=fat
++//@ edition: 2024
++//@ aux-crate: offload_strategies=offload_strategies.rs
++
++// This tests ensures an error is emmited with passing a `&Region<'_, _, _>` args to offload.
++
++#![feature(core_intrinsics)]
++#![feature(gpu_offload)]
++#![feature(offload)]
++
++use core::offload::Region;
++use offload_strategies::Dummy;
++
++fn kernel_shared(_region: &Region<'_, f32, Dummy>) {}
++
++fn kernel_mut(_region: &mut Region<'_, f32, Dummy>) {}
++
++fn main() {
++    let mut x = [0.0f32; 4];
++    let region = Region::<f32, Dummy>::new(&mut x[..]);
++    core::intrinsics::offload::<_, _, ()>(
++        //~^ ERROR offload kernel argument 0 is a reference to a `Region`
++        kernel_shared,
++        [1, 1, 1],
++        [1, 1, 1],
++        0,
++        -1,
++        (&region,),
++    );
++
++    let mut y = [0.0f32; 4];
++    let mut region = Region::<f32, Dummy>::new(&mut y[..]);
++    core::intrinsics::offload::<_, _, ()>(
++        //~^ ERROR offload kernel argument 0 is a reference to a `Region`
++        kernel_mut,
++        [1, 1, 1],
++        [1, 1, 1],
++        0,
++        -1,
++        (&mut region,),
++    );
++}
+diff --git a/tests/ui/offload/region_by_ref.stderr b/tests/ui/offload/region_by_ref.stderr
+new file mode 100644
+index 00000000000..25c278983ea
+--- /dev/null
++++ b/tests/ui/offload/region_by_ref.stderr
+@@ -0,0 +1,14 @@
++error: offload kernel argument 0 is a reference to a `Region`. Pass the `Region` by value so it can be mapped like a slice
++  --> $DIR/region_by_ref.rs:21:5
++   |
++LL |     core::intrinsics::offload::<_, _, ()>(
++   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++error: offload kernel argument 0 is a reference to a `Region`. Pass the `Region` by value so it can be mapped like a slice
++  --> $DIR/region_by_ref.rs:33:5
++   |
++LL |     core::intrinsics::offload::<_, _, ()>(
++   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++error: aborting due to 2 previous errors
++
+diff --git a/tests/ui/offload/region_not_copy.rs b/tests/ui/offload/region_not_copy.rs
+new file mode 100644
+index 00000000000..2ab8253b89f
+--- /dev/null
++++ b/tests/ui/offload/region_not_copy.rs
+@@ -0,0 +1,19 @@
++//@ edition: 2024
++//@ aux-crate: offload_strategies=offload_strategies.rs
++
++// This tests checks `Region` doesn't implement Copy.
++
++#![feature(gpu_offload)]
++#![feature(offload)]
++
++use core::offload::Region;
++use offload_strategies::Dummy;
++
++fn main() {
++    let mut x = [0.0f32; 4];
++    let mut a = Region::<f32, Dummy>::new(&mut x[..]);
++    let mut b = a;
++    if let (Some(_), Some(_)) = (a.get_mut(), b.get_mut()) {
++        //~^ ERROR borrow of moved value: `a`
++    }
++}
+diff --git a/tests/ui/offload/region_not_copy.stderr b/tests/ui/offload/region_not_copy.stderr
+new file mode 100644
+index 00000000000..9af4bc06458
+--- /dev/null
++++ b/tests/ui/offload/region_not_copy.stderr
+@@ -0,0 +1,13 @@
++error[E0382]: borrow of moved value: `a`
++  --> $DIR/region_not_copy.rs:16:34
++   |
++LL |     let mut a = Region::<f32, Dummy>::new(&mut x[..]);
++   |         ----- move occurs because `a` has type `Region<'_, f32, Dummy>`, which does not implement the `Copy` trait
++LL |     let mut b = a;
++   |                 - value moved here
++LL |     if let (Some(_), Some(_)) = (a.get_mut(), b.get_mut()) {
++   |                                  ^ value borrowed here after move
++
++error: aborting due to 1 previous error
++
++For more information about this error, try `rustc --explain E0382`.
+-- 
+2.43.0
+

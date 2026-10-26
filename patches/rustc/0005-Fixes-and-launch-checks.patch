@@ -1,0 +1,857 @@
+From 75b58c52ed5afdc2bc0097e16ecd0147d782bf54 Mon Sep 17 00:00:00 2001
+From: Marcelo Dominguez <dmmarcelo27@gmail.com>
+Date: Sun, 13 Sep 2026 14:39:53 +0200
+Subject: [PATCH 5/9] Fixes and launch checks
+
+---
+ compiler/rustc_hir_typeck/src/intrinsicck.rs  |  39 +++-
+ compiler/rustc_middle/src/ty/offload_meta.rs  |  15 +-
+ library/core/src/offload/mod.rs               | 207 ++++++++++++++----
+ .../rustc-dev-guide/src/offload/internals.md  |  25 +++
+ .../auxiliary/offload_strategies.rs           |  40 +++-
+ tests/codegen-llvm/gpu_offload/region_host.rs |   1 -
+ .../offload/auxiliary/offload_strategies.rs   |  40 +++-
+ tests/ui/offload/non_tuple_args.rs            |  10 +-
+ tests/ui/offload/non_tuple_args.stderr        |  17 +-
+ tests/ui/offload/region_borrow.rs             |   1 -
+ tests/ui/offload/region_borrow.stderr         |   2 +-
+ tests/ui/offload/region_by_ref.rs             |  41 +++-
+ tests/ui/offload/region_by_ref.stderr         |  22 +-
+ tests/ui/offload/region_launch_bounds.rs      |  18 ++
+ tests/ui/offload/region_not_copy.rs           |   1 -
+ tests/ui/offload/region_not_copy.stderr       |   2 +-
+ 16 files changed, 394 insertions(+), 87 deletions(-)
+ create mode 100644 tests/ui/offload/region_launch_bounds.rs
+
+diff --git a/compiler/rustc_hir_typeck/src/intrinsicck.rs b/compiler/rustc_hir_typeck/src/intrinsicck.rs
+index 7733bd7d172..364b7e35ae9 100644
+--- a/compiler/rustc_hir_typeck/src/intrinsicck.rs
++++ b/compiler/rustc_hir_typeck/src/intrinsicck.rs
+@@ -1,6 +1,7 @@
+ use hir::HirId;
+ use rustc_abi::Primitive::Pointer;
+ use rustc_abi::VariantIdx;
++use rustc_data_structures::fx::FxHashSet;
+ use rustc_errors::codes::*;
+ use rustc_errors::struct_span_code_err;
+ use rustc_hir as hir;
+@@ -135,8 +136,26 @@ fn check_transmute<'tcx>(
+     }
+ }
+ 
+-fn is_offload_region_ref<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+-    matches!(ty.kind(), ty::Ref(_, inner, _) if is_region_ty(tcx, *inner))
++fn contains_nested_offload_region<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
++    let mut visited = FxHashSet::default();
++    let mut stack = vec![ty];
++    let mut is_root = true;
++
++    while let Some(ty) = stack.pop() {
++        if !is_root && is_region_ty(tcx, ty) {
++            return true;
++        }
++        is_root = false;
++
++        if let ty::Adt(def, args) = *ty.kind()
++            && visited.insert(def.did())
++        {
++            stack.extend(def.all_fields().map(|field| field.ty(tcx, args).skip_norm_wip()));
++        }
++        stack.extend(ty.walk().skip(1).filter_map(|arg| arg.as_type()));
++    }
++
++    false
+ }
+ 
+ fn check_offload<'tcx>(
+@@ -210,20 +229,22 @@ fn check_offload<'tcx>(
+     {
+         let norm_input_ty = normalize(input_ty);
+         let norm_arg_ty = normalize(arg_ty);
+-        
+-        if is_offload_region_ref(tcx, norm_input_ty) || is_offload_region_ref(tcx, norm_arg_ty) {
+-            let err = tcx
++
++        if contains_nested_offload_region(tcx, norm_input_ty)
++            || contains_nested_offload_region(tcx, norm_arg_ty)
++        {
++            let guar = tcx
+                 .sess
+                 .dcx()
+                 .struct_span_err(
+                     span,
+                     format!(
+-                        "offload kernel argument {i} is a reference to a `Region`. Pass the \
+-                        `Region` by value so it can be mapped like a slice"
++                        "offload kernel argument {i} contains a `Region` nested inside another \
++                        type. Pass the `Region` by value so it can be mapped like a slice"
+                     ),
+                 )
+-                .emit();
+-            result = Err(err);
++                .emit_err();
++            result = Err(guar);
+         } else if norm_input_ty != norm_arg_ty {
+             let guar = tcx
+                 .sess
+diff --git a/compiler/rustc_middle/src/ty/offload_meta.rs b/compiler/rustc_middle/src/ty/offload_meta.rs
+index c51220912eb..6cf8abc4822 100644
+--- a/compiler/rustc_middle/src/ty/offload_meta.rs
++++ b/compiler/rustc_middle/src/ty/offload_meta.rs
+@@ -79,7 +79,20 @@ pub fn handle_abi<'tcx, C>(
+         if let Some(elem_ty) = region_element_ty(tcx, ty) {
+             let ptr = OffloadMetadata::from_ty(tcx, Ty::new_slice(tcx, elem_ty));
+             let len = OffloadMetadata::from_ty(tcx, tcx.types.usize);
+-            return vec![(ptr, Ty::new_mut_ptr(tcx, elem_ty)), (len, tcx.types.usize)];
++            // `Region` is a `{ ptr, len }` pair, but field order is not guaranteed.
++            return arg_abi
++                .layout
++                .fields
++                .index_by_increasing_offset()
++                .filter(|&i| arg_abi.layout.field(cx, i).size.bytes() != 0)
++                .map(|i| {
++                    if arg_abi.layout.field(cx, i).ty == tcx.types.usize {
++                        (len, tcx.types.usize)
++                    } else {
++                        (ptr, Ty::new_mut_ptr(tcx, elem_ty))
++                    }
++                })
++                .collect();
+         }
+ 
+         match arg_abi.layout.backend_repr {
+diff --git a/library/core/src/offload/mod.rs b/library/core/src/offload/mod.rs
+index 33d69ceb37d..aefe3a4eb16 100644
+--- a/library/core/src/offload/mod.rs
++++ b/library/core/src/offload/mod.rs
+@@ -1,4 +1,6 @@
+ // offload module
++use core::ptr::NonNull;
++
+ #[unstable(feature = "gpu_offload", issue = "131513")]
+ pub use crate::macros::builtin::offload_kernel;
+ #[unstable(feature = "gpu_offload", issue = "131513")]
+@@ -37,58 +39,52 @@
+ /// ```
+ #[macro_export]
+ #[unstable(feature = "gpu_offload", issue = "131513")]
+-#[allow_internal_unstable(core_intrinsics)]
++#[allow_internal_unstable(core_intrinsics, gpu_offload)]
+ macro_rules! offload {
+-    ( $($field:ident = $val:expr),* $(,)? ) => {
+-        $crate::offload!(@munch
+-            [ $($field = $val),* ];
+-            kernel = NONE;
+-            workgroup_dim = ([1, 1, 1]);
+-            thread_dim = ([1, 1, 1]);
+-            dyn_cache = (0);
+-            device = NONE;
+-            args = NONE
+-        )
++    (@munch [kernel = $val:expr $(, $($rest:tt)*)?]; kernel = NONE; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
++        $crate::offload!(@munch [ $($($rest)*)? ]; kernel = (SOME $val); workgroup_dim = $w; thread_dim = $t; dyn_cache = $d; device = $device; args = $a)
+     };
+-
+-    (@munch [kernel = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = NONE; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
+-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = (SOME $val); workgroup_dim = $w; thread_dim = $t; dyn_cache = $d; device = $device; args = $a)
+-    };
+-    (@munch [kernel = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = (SOME $old:expr); workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
++    (@munch [kernel = $val:expr $(, $($rest:tt)*)?]; kernel = (SOME $old:expr); workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
+         compile_error!("duplicate field `kernel`")
+     };
+-    (@munch [workgroup_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = ([1, 1, 1]); thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
+-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; workgroup_dim = (SOME $val); thread_dim = $t; dyn_cache = $d; device = $device; args = $a)
++    (@munch [workgroup_dim = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = ([1, 1, 1]); thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
++        $crate::offload!(@munch [ $($($rest)*)? ]; kernel = $k; workgroup_dim = (SOME $val); thread_dim = $t; dyn_cache = $d; device = $device; args = $a)
+     };
+-    (@munch [workgroup_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = (SOME $old:expr); thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
++    (@munch [workgroup_dim = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = (SOME $old:expr); thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
+         compile_error!("duplicate field `workgroup_dim`")
+     };
+-    (@munch [thread_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = ([1, 1, 1]); dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
+-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; workgroup_dim = $w; thread_dim = (SOME $val); dyn_cache = $d; device = $device; args = $a)
++    (@munch [thread_dim = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = ([1, 1, 1]); dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
++        $crate::offload!(@munch [ $($($rest)*)? ]; kernel = $k; workgroup_dim = $w; thread_dim = (SOME $val); dyn_cache = $d; device = $device; args = $a)
+     };
+-    (@munch [thread_dim = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = (SOME $old:expr); dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
++    (@munch [thread_dim = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = (SOME $old:expr); dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
+         compile_error!("duplicate field `thread_dim`")
+     };
+-    (@munch [dyn_cache = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = (0); device = $device:tt; args = $a:tt) => {
+-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; workgroup_dim = $w; thread_dim = $t; dyn_cache = (SOME $val); device = $device; args = $a)
++    (@munch [dyn_cache = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = (0); device = $device:tt; args = $a:tt) => {
++        $crate::offload!(@munch [ $($($rest)*)? ]; kernel = $k; workgroup_dim = $w; thread_dim = $t; dyn_cache = (SOME $val); device = $device; args = $a)
+     };
+-    (@munch [dyn_cache = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = (SOME $old:expr); device = $device:tt; args = $a:tt) => {
++    (@munch [dyn_cache = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = (SOME $old:expr); device = $device:tt; args = $a:tt) => {
+         compile_error!("duplicate field `dyn_cache`")
+     };
+-    (@munch [device = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = NONE; args = $a:tt) => {
+-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; workgroup_dim = $w; thread_dim = $t; dyn_cache = $d; device = (SOME $val); args = $a)
++    (@munch [device = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = NONE; args = $a:tt) => {
++        $crate::offload!(@munch [ $($($rest)*)? ]; kernel = $k; workgroup_dim = $w; thread_dim = $t; dyn_cache = $d; device = (SOME $val); args = $a)
+     };
+-    (@munch [device = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = (SOME $old:expr); args = $a:tt) => {
++    (@munch [device = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = (SOME $old:expr); args = $a:tt) => {
+         compile_error!("duplicate field `device`")
+     };
+-    (@munch [args = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = NONE) => {
+-        $crate::offload!(@munch [$($rest_f = $rest_v),*]; kernel = $k; workgroup_dim = $w; thread_dim = $t; dyn_cache = $d; device = $device; args = (SOME $val))
++    (@munch [args = ($($arg:expr),* $(,)?) $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = NONE) => {
++        $crate::offload!(@munch [ $($($rest)*)? ]; kernel = $k; workgroup_dim = $w; thread_dim = $t; dyn_cache = $d; device = $device; args = (SOME_TUPLE ($($arg),*)))
++    };
++    (@munch [args = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = NONE) => {
++        $crate::offload!(@munch [ $($($rest)*)? ]; kernel = $k; workgroup_dim = $w; thread_dim = $t; dyn_cache = $d; device = $device; args = (SOME $val))
++    };
++    (@munch [args = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = (SOME $old:expr)) => {
++        compile_error!("duplicate field `args`")
+     };
+-    (@munch [args = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = (SOME $old:expr)) => {
++    (@munch [args = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = (SOME_TUPLE $old:tt)) => {
+         compile_error!("duplicate field `args`")
+     };
+ 
+-    (@munch [$invalid:ident = $val:expr $(, $rest_f:ident = $rest_v:expr)*]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
++    (@munch [$invalid:ident = $val:expr $(, $($rest:tt)*)?]; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = $a:tt) => {
+         compile_error!(concat!("unknown field `", stringify!($invalid), "`"))
+     };
+ 
+@@ -98,14 +94,32 @@ macro_rules! offload {
+     (@munch []; kernel = $k:tt; workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = NONE) => {
+         compile_error!("missing `args`")
+     };
+-    (@munch []; kernel = (SOME $kernel:expr); workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = (SOME $args:expr)) => {
++    (@munch []; kernel = (SOME $kernel:expr); workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = (SOME_TUPLE ($($arg:expr),* $(,)?))) => {{
++        #[allow(unused_imports)]
++        use $crate::offload::{DefaultLaunchCheck as _, RegionLaunchCheck as _};
++
++        let __offload_grid = $crate::offload!(@value $w);
++        let __offload_block = $crate::offload!(@value $t);
++
+         $crate::intrinsics::offload::<_, _, ()>(
+             $kernel,
+-            $crate::offload!(@value $w),
+-            $crate::offload!(@value $t),
++            __offload_grid,
++            __offload_block,
+             $crate::offload!(@value $d),
+             $crate::offload!(@device $device),
+-            $args,
++            ($({
++                let __offload_arg = $arg;
++                (&__offload_arg).__offload_check_launch(__offload_grid, __offload_block);
++                __offload_arg
++            },)*),
++        )
++    }};
++    // Accepting an arbitrary expression here would let callers bypass the per-argument launch
++    // performed for `args = (..)` by binding the tuple to avariable first.
++    // FIXME(offload): run those checks on arbitrary expressions
++    (@munch []; kernel = (SOME $kernel:expr); workgroup_dim = $w:tt; thread_dim = $t:tt; dyn_cache = $d:tt; device = $device:tt; args = (SOME $args:expr)) => {
++        compile_error!(
++            "`args` must be a tuple literal"
+         )
+     };
+ 
+@@ -124,16 +138,55 @@ macro_rules! offload {
+         );
+         device
+     } };
++
++    ( $($tt:tt)* ) => {
++        $crate::offload!(@munch
++            [ $($tt)* ];
++            kernel = NONE;
++            workgroup_dim = ([1, 1, 1]);
++            thread_dim = ([1, 1, 1]);
++            dyn_cache = (0);
++            device = NONE;
++            args = NONE
++        )
++    };
+ }
+ 
+ // Region & Partitioning Strategy
+ 
++/// Error returned by [`PartitioningStrategy::check_launch`] when a launch
++/// configuration is not compatible with a partitioning strategy.
++#[derive(Debug)]
++#[unstable(feature = "gpu_offload", issue = "131513")]
++pub struct LaunchError {
++    message: &'static str,
++}
++
++impl LaunchError {
++    /// Creates a new [`LaunchError`] with the given message.
++    #[unstable(feature = "gpu_offload", issue = "131513")]
++    pub const fn new(message: &'static str) -> Self {
++        Self { message }
++    }
++}
++
++#[unstable(feature = "gpu_offload", issue = "131513")]
++impl core::fmt::Display for LaunchError {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        f.write_str(self.message)
++    }
++}
++
+ /// Defines how execution units access memory regions.
+ ///
+ /// # Safety
+ ///
+ /// Implementations must guarantee that generated views are disjoint.
+-#[unstable(feature = "offload", issue = "131513")]
++///
++/// Implementations must also implement [`check_launch`] correctly since it is soundness-critical.
++///
++/// [`check_launch`]: PartitioningStrategy::check_launch
++#[unstable(feature = "gpu_offload", issue = "131513")]
+ pub unsafe trait PartitioningStrategy {
+     /// Read-only view type for the partitioned memory region.
+     type View<'a, T: 'a>;
+@@ -150,7 +203,7 @@ pub unsafe trait PartitioningStrategy {
+     ///
+     /// `ptr` must point to `len` valid, initialized elements of type `T`.
+     /// The memory must stay valid for lifetime `'a`.
+-    unsafe fn get<'a, T>(ptr: *const T, len: usize) -> Option<Self::View<'a, T>>;
++    unsafe fn get<'a, T>(ptr: NonNull<T>, len: usize) -> Option<Self::View<'a, T>>;
+ 
+     /// Returns a mutable view of the region for the current execution context.
+     ///
+@@ -159,41 +212,58 @@ pub unsafe trait PartitioningStrategy {
+     /// `ptr` must point to `len` valid, initialized elements of type `T`.
+     /// The memory must stay valid for lifetime `'a`.
+     /// The returned view must be disjoint from all other active views.
+-    unsafe fn get_mut<'a, T>(ptr: *mut T, len: usize) -> Option<Self::ViewMut<'a, T>>;
++    unsafe fn get_mut<'a, T>(ptr: NonNull<T>, len: usize) -> Option<Self::ViewMut<'a, T>>;
++
++    /// Checks that a kernel using this strategy can be launched with `len`
++    /// elements on a `grid` by `block` launch configuration.
++    ///
++    /// This is called automatically before the kernel is launched.
++    ///
++    /// # Soundness
++    ///
++    /// This check is soundness-critical. It may only return `Ok` unconditionally
++    /// if and only if a launch is valid for arbitrary `len`, `grid` and `block` values.
++    /// If there is any configuration for which this strategy would produce incorrect
++    /// results or cause undefined behavior, it must return a [`LaunchError`] instead.
++    fn check_launch(len: usize, grid: [u32; 3], block: [u32; 3]) -> Result<(), LaunchError>;
+ }
+ 
+ /// A memory region bound to a partitioning strategy.
+ #[derive(Debug)]
+-#[unstable(feature = "offload", issue = "131513")]
++#[unstable(feature = "gpu_offload", issue = "131513")]
+ #[rustc_diagnostic_item = "offload_region"]
+ pub struct Region<'a, T, S: PartitioningStrategy> {
+-    ptr: *mut T,
++    ptr: NonNull<T>,
+     len: usize,
+     _marker: core::marker::PhantomData<(&'a mut [T], S)>,
+ }
+ 
+ /// Raw representation used to build a [`Region`] from common aggregate types.
+ #[derive(Debug)]
+-#[unstable(feature = "offload", issue = "131513")]
++#[unstable(feature = "gpu_offload", issue = "131513")]
+ pub struct RawRegion<'a, T> {
+-    ptr: *mut T,
++    ptr: NonNull<T>,
+     len: usize,
+     _marker: core::marker::PhantomData<&'a mut [T]>,
+ }
+ 
+ impl<'a, T> From<&'a mut [T]> for RawRegion<'a, T> {
+     fn from(data: &'a mut [T]) -> Self {
+-        Self { ptr: data.as_mut_ptr(), len: data.len(), _marker: core::marker::PhantomData }
++        // SAFETY: `data.as_mut_ptr()` is non-null, because it is derived from a reference.
++        let ptr = unsafe { NonNull::new_unchecked(data.as_mut_ptr()) };
++        Self { ptr, len: data.len(), _marker: core::marker::PhantomData }
+     }
+ }
+ 
+ impl<'a, T, const N: usize> From<&'a mut [T; N]> for RawRegion<'a, T> {
+     fn from(data: &'a mut [T; N]) -> Self {
+-        Self { ptr: data.as_mut_ptr(), len: N, _marker: core::marker::PhantomData }
++        // SAFETY: `data.as_mut_ptr()` is non-null, because it is derived from a reference.
++        let ptr = unsafe { NonNull::new_unchecked(data.as_mut_ptr()) };
++        Self { ptr, len: N, _marker: core::marker::PhantomData }
+     }
+ }
+ 
+-#[unstable(feature = "offload", issue = "131513")]
++#[unstable(feature = "gpu_offload", issue = "131513")]
+ impl<'a, T, S: PartitioningStrategy> Region<'a, T, S> {
+     /// Creates a new partitioned region from data convertible into a [`RawRegion`].
+     pub fn new<D>(data: D) -> Self
+@@ -207,7 +277,7 @@ pub fn new<D>(data: D) -> Self
+     /// Returns a read-only view for the current execution context.
+     pub fn get(&self) -> Option<S::View<'_, T>> {
+         // SAFETY: `self.ptr` points to `self.len` valid elements for lifetime `'a`.
+-        unsafe { S::get(self.ptr as *const T, self.len) }
++        unsafe { S::get(self.ptr, self.len) }
+     }
+ 
+     /// Returns a mutable view for the current execution context.
+@@ -217,9 +287,52 @@ pub fn get_mut(&mut self) -> Option<S::ViewMut<'_, T>> {
+         unsafe { S::get_mut(self.ptr, self.len) }
+     }
+ 
++    /// Checks that this region can be launched with the given configuration.
++    ///
++    /// Called automatically by the [`offload!`] macro before launching a kernel.
++    pub fn check_launch(&self, grid: [u32; 3], block: [u32; 3]) -> Result<(), LaunchError> {
++        S::check_launch(self.len, grid, block)
++    }
++
+     /// Reborrows the region, producing a new region that aliases the same memory with
+     /// the lifetime of the borrow.
+     pub fn reborrow(&mut self) -> Region<'_, T, S> {
+         Region { ptr: self.ptr, len: self.len, _marker: core::marker::PhantomData }
+     }
+ }
++
++// Launch validation helpers.
++
++/// Implementation detail of [`offload!`]: validates a [`Region`] argument against
++/// the launch configuration of an offload call.
++#[doc(hidden)]
++#[unstable(feature = "gpu_offload", issue = "131513")]
++pub trait RegionLaunchCheck {
++    /// Panics if the region's partitioning strategy rejects the launch.
++    fn __offload_check_launch(&self, grid: [u32; 3], block: [u32; 3]);
++}
++
++#[unstable(feature = "gpu_offload", issue = "131513")]
++impl<'a, T, S: PartitioningStrategy> RegionLaunchCheck for Region<'a, T, S> {
++    fn __offload_check_launch(&self, grid: [u32; 3], block: [u32; 3]) {
++        if let Err(err) = self.check_launch(grid, block) {
++            panic!(
++                "offload launch is not supported by the region's partitioning strategy: {}",
++                err,
++            );
++        }
++    }
++}
++
++/// no-op launch check for kernel arguments that are not [`Region`]s.
++#[doc(hidden)]
++#[unstable(feature = "gpu_offload", issue = "131513")]
++pub trait DefaultLaunchCheck {
++    /// Does nothing.
++    fn __offload_check_launch(&self, grid: [u32; 3], block: [u32; 3]);
++}
++
++#[unstable(feature = "gpu_offload", issue = "131513")]
++impl<T: ?Sized> DefaultLaunchCheck for &T {
++    fn __offload_check_launch(&self, _grid: [u32; 3], _block: [u32; 3]) {}
++}
+diff --git a/src/doc/rustc-dev-guide/src/offload/internals.md b/src/doc/rustc-dev-guide/src/offload/internals.md
+index da6333f984a..8fad6109c2f 100644
+--- a/src/doc/rustc-dev-guide/src/offload/internals.md
++++ b/src/doc/rustc-dev-guide/src/offload/internals.md
+@@ -53,3 +53,28 @@ Trying to teach the whole rustc middle and backend to be aware that any symbol n
+ and it is questionable why we should make the whole compiler more complex, if the alternative is a ~5 line cargo wrapper.
+ We still control the full compilation pipeline and have both host and device code available,
+ therefore there shouldn't be a runtime performance difference between the two approaches.
++
++## Safety and region design
++
++The `Region` type (`core::offload::Region`) is a host-side handle to a contiguous memory region
++that should be partitioned across the execution units (threads) of an offloaded kernel. Creating a
++`Region` takes a mutable borrow of the underlying slice, so Rust's borrow checker prevents the host
++from accessing the memory while the region is alive. `Region` is deliberately neither `Copy` nor
++`Clone`, which avoids aliasing the same memory through multiple handles. A region can be reborrowed
++with `Region::reborrow` when a shorter lifetime is needed.
++
++The way a region is split across execution units is described by the `PartitioningStrategy` trait.
++Given the region pointer and length, the strategy's `get` and `get_mut` methods return a read-only
++or mutable view for the current execution unit, or `None` where the current unit has no work to do.
++`PartitioningStrategy` is an `unsafe` trait: an implementation must guarantee that all views it
++hands out are disjoint, otherwise two units could write to the same location.
++
++A strategy exposes `check_launch(len, grid, block)`, which decides whether a given number of elements
++can be launched with a particular grid/block configuration. This check is soundness-critical: it may
++only return `Ok` unconditionally if and only if a launch is valid for arbitrary `len`, `grid`, and
++`block` values. If any configuration would produce incorrect results or cause undefined behavior, it
++must return a `LaunchError`. The `offload!` macro calls `check_launch` for every `Region` argument
++before launching, and panics if the check fails.
++
++Only `Region`s passed to a kernel by value can be mapped like slices. A `Region` nested inside another
++type is rejected during type checking (see `contains_nested_offload_region` in `rustc_hir_typeck`).
+diff --git a/tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs b/tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs
+index 1e3271e5a85..0669d92b604 100644
+--- a/tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs
++++ b/tests/codegen-llvm/gpu_offload/auxiliary/offload_strategies.rs
+@@ -1,9 +1,9 @@
+ //@ edition: 2024
+ 
+ #![feature(gpu_offload)]
+-#![feature(offload)]
+ 
+-use core::offload::PartitioningStrategy;
++use core::offload::{LaunchError, PartitioningStrategy};
++use core::ptr::NonNull;
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct Dummy;
+@@ -16,11 +16,43 @@ fn index() -> usize {
+         0
+     }
+ 
+-    unsafe fn get<'a, T>(_ptr: *const T, _len: usize) -> Option<Self::View<'a, T>> {
++    unsafe fn get<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::View<'a, T>> {
+         None
+     }
+ 
+-    unsafe fn get_mut<'a, T>(_ptr: *mut T, _len: usize) -> Option<Self::ViewMut<'a, T>> {
++    unsafe fn get_mut<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::ViewMut<'a, T>> {
+         None
+     }
++
++    fn check_launch(_len: usize, _grid: [u32; 3], _block: [u32; 3]) -> Result<(), LaunchError> {
++        Ok(())
++    }
++}
++
++#[derive(Debug, Clone, Copy)]
++pub struct Linear1D;
++
++unsafe impl PartitioningStrategy for Linear1D {
++    type View<'a, T: 'a> = &'a T;
++    type ViewMut<'a, T: 'a> = &'a mut T;
++
++    fn index() -> usize {
++        0
++    }
++
++    unsafe fn get<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::View<'a, T>> {
++        None
++    }
++
++    unsafe fn get_mut<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::ViewMut<'a, T>> {
++        None
++    }
++
++    fn check_launch(_len: usize, grid: [u32; 3], block: [u32; 3]) -> Result<(), LaunchError> {
++        if grid[1] == 1 && grid[2] == 1 && block[1] == 1 && block[2] == 1 {
++            Ok(())
++        } else {
++            Err(LaunchError::new(""))
++        }
++    }
+ }
+diff --git a/tests/codegen-llvm/gpu_offload/region_host.rs b/tests/codegen-llvm/gpu_offload/region_host.rs
+index 975096c7fb5..badbd81a77d 100644
+--- a/tests/codegen-llvm/gpu_offload/region_host.rs
++++ b/tests/codegen-llvm/gpu_offload/region_host.rs
+@@ -8,7 +8,6 @@
+ #![feature(abi_gpu_kernel)]
+ #![feature(core_intrinsics)]
+ #![feature(gpu_offload)]
+-#![feature(offload)]
+ #![feature(rustc_attrs)]
+ #![no_main]
+ 
+diff --git a/tests/ui/offload/auxiliary/offload_strategies.rs b/tests/ui/offload/auxiliary/offload_strategies.rs
+index 1e3271e5a85..0669d92b604 100644
+--- a/tests/ui/offload/auxiliary/offload_strategies.rs
++++ b/tests/ui/offload/auxiliary/offload_strategies.rs
+@@ -1,9 +1,9 @@
+ //@ edition: 2024
+ 
+ #![feature(gpu_offload)]
+-#![feature(offload)]
+ 
+-use core::offload::PartitioningStrategy;
++use core::offload::{LaunchError, PartitioningStrategy};
++use core::ptr::NonNull;
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct Dummy;
+@@ -16,11 +16,43 @@ fn index() -> usize {
+         0
+     }
+ 
+-    unsafe fn get<'a, T>(_ptr: *const T, _len: usize) -> Option<Self::View<'a, T>> {
++    unsafe fn get<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::View<'a, T>> {
+         None
+     }
+ 
+-    unsafe fn get_mut<'a, T>(_ptr: *mut T, _len: usize) -> Option<Self::ViewMut<'a, T>> {
++    unsafe fn get_mut<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::ViewMut<'a, T>> {
+         None
+     }
++
++    fn check_launch(_len: usize, _grid: [u32; 3], _block: [u32; 3]) -> Result<(), LaunchError> {
++        Ok(())
++    }
++}
++
++#[derive(Debug, Clone, Copy)]
++pub struct Linear1D;
++
++unsafe impl PartitioningStrategy for Linear1D {
++    type View<'a, T: 'a> = &'a T;
++    type ViewMut<'a, T: 'a> = &'a mut T;
++
++    fn index() -> usize {
++        0
++    }
++
++    unsafe fn get<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::View<'a, T>> {
++        None
++    }
++
++    unsafe fn get_mut<'a, T>(_ptr: NonNull<T>, _len: usize) -> Option<Self::ViewMut<'a, T>> {
++        None
++    }
++
++    fn check_launch(_len: usize, grid: [u32; 3], block: [u32; 3]) -> Result<(), LaunchError> {
++        if grid[1] == 1 && grid[2] == 1 && block[1] == 1 && block[2] == 1 {
++            Ok(())
++        } else {
++            Err(LaunchError::new(""))
++        }
++    }
+ }
+diff --git a/tests/ui/offload/non_tuple_args.rs b/tests/ui/offload/non_tuple_args.rs
+index 2c63b6d6abe..44da33a808c 100644
+--- a/tests/ui/offload/non_tuple_args.rs
++++ b/tests/ui/offload/non_tuple_args.rs
+@@ -3,9 +3,15 @@
+ #![feature(gpu_offload)]
+ 
+ fn main() {
+-    // args_ty is not a tuple
++    // `args` is not a tuple literal.
+     core::offload::offload! { kernel = kernel_0, args = 42 }
+-    //~^ ERROR `{integer}` is not a tuple
++    //~^ ERROR `args` must be a tuple literal
++
++    // FIXME(offload): Binding a tuple to a variable would currently bypass the
++    // per-argument launch checks, so the macro rejects it for now.
++    let args = ();
++    core::offload::offload! { kernel = kernel_0, args = args }
++    //~^ ERROR `args` must be a tuple literal
+ }
+ 
+ fn kernel_0() {}
+diff --git a/tests/ui/offload/non_tuple_args.stderr b/tests/ui/offload/non_tuple_args.stderr
+index 26687d4b4bb..d930db46464 100644
+--- a/tests/ui/offload/non_tuple_args.stderr
++++ b/tests/ui/offload/non_tuple_args.stderr
+@@ -1,13 +1,18 @@
+-error[E0277]: `{integer}` is not a tuple
++error: `args` must be a tuple literal
+   --> $DIR/non_tuple_args.rs:7:5
+    |
+ LL |     core::offload::offload! { kernel = kernel_0, args = 42 }
+-   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the nightly-only, unstable trait `std::marker::Tuple` is not implemented for `{integer}`
++   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+-note: required by a bound in `offload`
+-  --> $SRC_DIR/core/src/intrinsics/mod.rs:LL:COL
+    = note: this error originates in the macro `$crate::offload` which comes from the expansion of the macro `core::offload::offload` (in Nightly builds, run with -Z macro-backtrace for more info)
+ 
+-error: aborting due to 1 previous error
++error: `args` must be a tuple literal
++  --> $DIR/non_tuple_args.rs:13:5
++   |
++LL |     core::offload::offload! { kernel = kernel_0, args = args }
++   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++   |
++   = note: this error originates in the macro `$crate::offload` which comes from the expansion of the macro `core::offload::offload` (in Nightly builds, run with -Z macro-backtrace for more info)
++
++error: aborting due to 2 previous errors
+ 
+-For more information about this error, try `rustc --explain E0277`.
+diff --git a/tests/ui/offload/region_borrow.rs b/tests/ui/offload/region_borrow.rs
+index d1424d1cde3..082d59b42cc 100644
+--- a/tests/ui/offload/region_borrow.rs
++++ b/tests/ui/offload/region_borrow.rs
+@@ -5,7 +5,6 @@
+ // `Region` was created from while the `Region` is still alive.
+ 
+ #![feature(gpu_offload)]
+-#![feature(offload)]
+ #![allow(unused_assignments)]
+ 
+ use core::offload::Region;
+diff --git a/tests/ui/offload/region_borrow.stderr b/tests/ui/offload/region_borrow.stderr
+index 4f7a153bf30..6a90cec15eb 100644
+--- a/tests/ui/offload/region_borrow.stderr
++++ b/tests/ui/offload/region_borrow.stderr
+@@ -1,5 +1,5 @@
+ error[E0506]: cannot assign to `x[_]` because it is borrowed
+-  --> $DIR/region_borrow.rs:18:5
++  --> $DIR/region_borrow.rs:17:5
+    |
+ LL |     let region = Region::<f32, Dummy>::new(&mut x[..]);
+    |                                                 - `x[_]` is borrowed here
+diff --git a/tests/ui/offload/region_by_ref.rs b/tests/ui/offload/region_by_ref.rs
+index 8bdc9281552..37ac1aa9c1b 100644
+--- a/tests/ui/offload/region_by_ref.rs
++++ b/tests/ui/offload/region_by_ref.rs
+@@ -2,11 +2,11 @@
+ //@ edition: 2024
+ //@ aux-crate: offload_strategies=offload_strategies.rs
+ 
+-// This tests ensures an error is emmited with passing a `&Region<'_, _, _>` args to offload.
++// This test ensures an error is emitted when a `Region` is nested inside another
++// type instead of being passed by value.
+ 
+ #![feature(core_intrinsics)]
+ #![feature(gpu_offload)]
+-#![feature(offload)]
+ 
+ use core::offload::Region;
+ use offload_strategies::Dummy;
+@@ -15,11 +15,20 @@ fn kernel_shared(_region: &Region<'_, f32, Dummy>) {}
+ 
+ fn kernel_mut(_region: &mut Region<'_, f32, Dummy>) {}
+ 
++fn kernel_nested(_arg: (u32, Region<'_, f32, Dummy>)) {}
++
++struct Wrapper<'a> {
++    region: Region<'a, f32, Dummy>,
++    scalar: f32,
++}
++
++fn kernel_wrapper(_arg: Wrapper<'_>) {}
++
+ fn main() {
+     let mut x = [0.0f32; 4];
+     let region = Region::<f32, Dummy>::new(&mut x[..]);
+     core::intrinsics::offload::<_, _, ()>(
+-        //~^ ERROR offload kernel argument 0 is a reference to a `Region`
++        //~^ ERROR offload kernel argument 0 contains a `Region` nested inside another type
+         kernel_shared,
+         [1, 1, 1],
+         [1, 1, 1],
+@@ -31,7 +40,7 @@ fn main() {
+     let mut y = [0.0f32; 4];
+     let mut region = Region::<f32, Dummy>::new(&mut y[..]);
+     core::intrinsics::offload::<_, _, ()>(
+-        //~^ ERROR offload kernel argument 0 is a reference to a `Region`
++        //~^ ERROR offload kernel argument 0 contains a `Region` nested inside another type
+         kernel_mut,
+         [1, 1, 1],
+         [1, 1, 1],
+@@ -39,4 +48,28 @@ fn main() {
+         -1,
+         (&mut region,),
+     );
++
++    let mut z = [0.0f32; 4];
++    let region = Region::<f32, Dummy>::new(&mut z[..]);
++    core::intrinsics::offload::<_, _, ()>(
++        //~^ ERROR offload kernel argument 0 contains a `Region` nested inside another type
++        kernel_nested,
++        [1, 1, 1],
++        [1, 1, 1],
++        0,
++        -1,
++        ((0u32, region),),
++    );
++
++    let mut w = [0.0f32; 4];
++    let region = Region::<f32, Dummy>::new(&mut w[..]);
++    core::intrinsics::offload::<_, _, ()>(
++        //~^ ERROR offload kernel argument 0 contains a `Region` nested inside another type
++        kernel_wrapper,
++        [1, 1, 1],
++        [1, 1, 1],
++        0,
++        -1,
++        (Wrapper { region, scalar: 0.0 },),
++    );
+ }
+diff --git a/tests/ui/offload/region_by_ref.stderr b/tests/ui/offload/region_by_ref.stderr
+index 25c278983ea..b3aed2909a4 100644
+--- a/tests/ui/offload/region_by_ref.stderr
++++ b/tests/ui/offload/region_by_ref.stderr
+@@ -1,14 +1,26 @@
+-error: offload kernel argument 0 is a reference to a `Region`. Pass the `Region` by value so it can be mapped like a slice
+-  --> $DIR/region_by_ref.rs:21:5
++error: offload kernel argument 0 contains a `Region` nested inside another type. Pass the `Region` by value so it can be mapped like a slice
++  --> $DIR/region_by_ref.rs:30:5
+    |
+ LL |     core::intrinsics::offload::<_, _, ()>(
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 
+-error: offload kernel argument 0 is a reference to a `Region`. Pass the `Region` by value so it can be mapped like a slice
+-  --> $DIR/region_by_ref.rs:33:5
++error: offload kernel argument 0 contains a `Region` nested inside another type. Pass the `Region` by value so it can be mapped like a slice
++  --> $DIR/region_by_ref.rs:42:5
+    |
+ LL |     core::intrinsics::offload::<_, _, ()>(
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ 
+-error: aborting due to 2 previous errors
++error: offload kernel argument 0 contains a `Region` nested inside another type. Pass the `Region` by value so it can be mapped like a slice
++  --> $DIR/region_by_ref.rs:54:5
++   |
++LL |     core::intrinsics::offload::<_, _, ()>(
++   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++error: offload kernel argument 0 contains a `Region` nested inside another type. Pass the `Region` by value so it can be mapped like a slice
++  --> $DIR/region_by_ref.rs:66:5
++   |
++LL |     core::intrinsics::offload::<_, _, ()>(
++   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
++
++error: aborting due to 4 previous errors
+ 
+diff --git a/tests/ui/offload/region_launch_bounds.rs b/tests/ui/offload/region_launch_bounds.rs
+new file mode 100644
+index 00000000000..8ce655b6763
+--- /dev/null
++++ b/tests/ui/offload/region_launch_bounds.rs
+@@ -0,0 +1,18 @@
++//@ run-fail
++//@ edition: 2024
++//@ aux-crate: offload_strategies=offload_strategies.rs
++//@ error-pattern: offload launch is not supported by the region's partitioning strategy
++
++#![feature(gpu_offload)]
++
++use core::offload::{Region, RegionLaunchCheck};
++use offload_strategies::Linear1D;
++
++fn main() {
++    let mut x = [0.0f32; 4];
++    let region = Region::<f32, Linear1D>::new(&mut x[..]);
++
++    // `Linear1D` only supports single-dimensional launches, so `[4, 2, 1]` is
++    // rejected.
++    region.__offload_check_launch([4, 2, 1], [1, 1, 1]);
++}
+diff --git a/tests/ui/offload/region_not_copy.rs b/tests/ui/offload/region_not_copy.rs
+index 2ab8253b89f..4cdda7fc159 100644
+--- a/tests/ui/offload/region_not_copy.rs
++++ b/tests/ui/offload/region_not_copy.rs
+@@ -4,7 +4,6 @@
+ // This tests checks `Region` doesn't implement Copy.
+ 
+ #![feature(gpu_offload)]
+-#![feature(offload)]
+ 
+ use core::offload::Region;
+ use offload_strategies::Dummy;
+diff --git a/tests/ui/offload/region_not_copy.stderr b/tests/ui/offload/region_not_copy.stderr
+index 9af4bc06458..03d75825d49 100644
+--- a/tests/ui/offload/region_not_copy.stderr
++++ b/tests/ui/offload/region_not_copy.stderr
+@@ -1,5 +1,5 @@
+ error[E0382]: borrow of moved value: `a`
+-  --> $DIR/region_not_copy.rs:16:34
++  --> $DIR/region_not_copy.rs:15:34
+    |
+ LL |     let mut a = Region::<f32, Dummy>::new(&mut x[..]);
+    |         ----- move occurs because `a` has type `Region<'_, f32, Dummy>`, which does not implement the `Copy` trait
+-- 
+2.43.0
+

@@ -3,7 +3,7 @@ extern crate libc;
 
 #[cfg(target_os = "linux")]
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct Timespec {
     tv_sec: libc::time_t,
     tv_nsec: libc::c_long,

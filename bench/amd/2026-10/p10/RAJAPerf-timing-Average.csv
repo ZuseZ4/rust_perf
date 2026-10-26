@@ -1,0 +1,10 @@
+Mean Runtime Report (sec.)  ,  ,  ,  , 
+Variant                 , Base_HIP  , RAJA_HIP  , RAJA_HIP   , RAJA_HIP  
+Tuning                  , block_256 , block_256 , kernel_256 , launch_256
+Apps_DEL_DOT_VEC_2D     ,  0.005640 ,  0.005604 ,    Not run ,    Not run
+Apps_ENERGY             ,  0.024936 ,  0.024892 ,    Not run ,    Not run
+Apps_FIR                ,  0.006230 ,  0.006229 ,    Not run ,    Not run
+Apps_LTIMES             ,  0.013628 ,   Not run ,   0.016133 ,   0.013610
+Apps_MATVEC_3D_STENCIL  ,  0.017060 ,  0.017656 ,    Not run ,    Not run
+Apps_PRESSURE           ,  0.030218 ,  0.030494 ,    Not run ,    Not run
+Apps_VOL3D              ,  0.006281 ,  0.006032 ,    Not run ,    Not run

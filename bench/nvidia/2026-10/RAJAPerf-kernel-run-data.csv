@@ -1,0 +1,17 @@
+Kernels run without MPI
+Kernel                   , Variant     , Tuning       ,    Problem size , Checksum   ,    Mean time per rep (sec.) ,    Mean Bandwidth (GiB per sec.) ,    Mean flops (gigaFLOP per sec.)
+Apps_DEL_DOT_VEC_2D      , Base_CUDA   , block_256    ,         1000000 , PASSED     ,                 2.14020e-05 ,                          2091.54 ,                           2523.13
+Apps_DEL_DOT_VEC_2D      , RAJA_CUDA   , block_256    ,         1000000 , PASSED     ,                 2.05984e-05 ,                          2173.13 ,                           2621.56
+Apps_ENERGY              , Base_CUDA   , block_256    ,         1000000 , PASSED     ,                 7.64454e-05 ,                          2631.49 ,                           719.468
+Apps_ENERGY              , RAJA_CUDA   , block_256    ,         1000000 , PASSED     ,                 7.54097e-05 ,                          2667.64 ,                           729.349
+Apps_FIR                 , Base_CUDA   , block_256    ,         1000000 , PASSED     ,                 8.00788e-06 ,                          1860.84 ,                           3996.06
+Apps_FIR                 , RAJA_CUDA   , block_256    ,         1000000 , PASSED     ,                 7.95114e-06 ,                          1874.12 ,                           4024.58
+Apps_LTIMES              , Base_CUDA   , block_256    ,          999424 , PASSED     ,                 0.000124899 ,                          106.291 ,                           400.094
+Apps_LTIMES              , RAJA_CUDA   , kernel_256   ,          999424 , PASSED     ,                     0.00000 ,                              inf ,                               inf
+Apps_LTIMES              , RAJA_CUDA   , launch_256   ,          999424 , PASSED     ,                     0.00000 ,                              inf ,                               inf
+Apps_MATVEC_3D_STENCIL   , Base_CUDA   , block_256    ,         1000000 , PASSED     ,                 6.20575e-05 ,                          2080.56 ,                           854.047
+Apps_MATVEC_3D_STENCIL   , RAJA_CUDA   , block_256    ,         1000000 , PASSED     ,                 5.39898e-05 ,                          2391.45 ,                           981.666
+Apps_PRESSURE            , Base_CUDA   , block_256    ,         1000000 , PASSED     ,                 1.83036e-05 ,                          2442.33 ,                           163.902
+Apps_PRESSURE            , RAJA_CUDA   , block_256    ,         1000000 , PASSED     ,                 1.88174e-05 ,                          2375.65 ,                           159.427
+Apps_VOL3D               , Base_CUDA   , block_256    ,         1000000 , PASSED     ,                 1.87749e-05 ,                          1763.88 ,                           4229.98
+Apps_VOL3D               , RAJA_CUDA   , block_256    ,         1000000 , PASSED     ,                 1.69408e-05 ,                          1954.85 ,                           4687.95

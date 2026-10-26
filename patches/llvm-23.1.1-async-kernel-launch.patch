@@ -1,0 +1,173 @@
+diff --git a/offload/include/omptarget.h b/offload/include/omptarget.h
+index db9590844b2fd..a925d63e21cca 100644
+--- a/offload/include/omptarget.h
++++ b/offload/include/omptarget.h
+@@ -412,8 +412,22 @@ void __tgt_target_data_update_nowait_mapper(
+ // same action as data_end above. The following types are used; this
+ // function returns 0 if it was able to transfer the execution to a
+ // target and an int different from zero otherwise.
++struct __tgt_async_info_handle;
++
++__tgt_async_info_handle *__tgt_async_info_create(int64_t DeviceId);
++
++int __tgt_async_info_synchronize(__tgt_async_info_handle *Handle);
++
++void __tgt_async_info_destroy(__tgt_async_info_handle *Handle);
++
+ int __tgt_target_kernel(ident_t *Loc, int64_t DeviceId, int32_t NumTeams,
+-                        int32_t ThreadLimit, void *HostPtr, KernelArgsTy *Args);
++                        int32_t ThreadLimit, void *HostPtr,
++                        KernelArgsTy *Args);
++
++int __tgt_target_kernel_async(ident_t *Loc, int64_t DeviceId,
++                              int32_t NumTeams, int32_t ThreadLimit,
++                              void *HostPtr, KernelArgsTy *Args,
++                              __tgt_async_info_handle *Handle);
+ 
+ // Non-blocking synchronization for target nowait regions. This function
+ // acquires the asynchronous context from task data of the current task being
+diff --git a/offload/libomptarget/exports b/offload/libomptarget/exports
+index 1831c43cc5f29..496aecc7a05d1 100644
+--- a/offload/libomptarget/exports
++++ b/offload/libomptarget/exports
+@@ -10,6 +10,10 @@ VERS1.0 {
+     __tgt_target_data_end;
+     __tgt_target_data_update;
+     __tgt_target;
++    __tgt_target_kernel_async;
++    __tgt_async_info_create;
++    __tgt_async_info_synchronize;
++    __tgt_async_info_destroy;
+     __tgt_target_teams;
+     __tgt_target_data_begin_nowait;
+     __tgt_target_data_end_nowait;
+diff --git a/offload/libomptarget/interface.cpp b/offload/libomptarget/interface.cpp
+index 184a696d884df..31c35058f4b4d 100644
+--- a/offload/libomptarget/interface.cpp
++++ b/offload/libomptarget/interface.cpp
+@@ -31,6 +31,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <memory>
++#include <optional>
+ #include <vector>
+ 
+ #ifdef OMPT_SUPPORT
+@@ -75,6 +76,45 @@ bool checkDevice(int64_t &DeviceID, ident_t *Loc) {
+   return false;
+ }
+ 
++struct __tgt_async_info_handle {
++  int64_t DeviceId;
++  AsyncInfoTy AsyncInfo;
++
++  __tgt_async_info_handle(int64_t DeviceId, DeviceTy &Device)
++      : DeviceId(DeviceId), AsyncInfo(Device) {}
++};
++
++EXTERN __tgt_async_info_handle *
++__tgt_async_info_create(int64_t DeviceId) {
++  assert(PM && "Runtime not initialized");
++
++  if (checkDevice(DeviceId, nullptr))
++    return nullptr;
++
++  auto DeviceOrErr = PM->getDevice(DeviceId);
++  if (!DeviceOrErr)
++    return nullptr;
++
++  return new __tgt_async_info_handle(DeviceId, *DeviceOrErr);
++}
++
++EXTERN int __tgt_async_info_synchronize(
++    __tgt_async_info_handle *Handle) {
++  if (!Handle)
++    return OFFLOAD_SUCCESS;
++
++  return Handle->AsyncInfo.synchronize();
++}
++
++EXTERN void __tgt_async_info_destroy(
++    __tgt_async_info_handle *Handle) {
++  if (!Handle)
++    return;
++
++  Handle->AsyncInfo.synchronize();
++  delete Handle;
++}
++
+ ////////////////////////////////////////////////////////////////////////////////
+ /// adds requires flags
+ EXTERN void __tgt_register_requires(int64_t Flags) {
+@@ -370,7 +410,8 @@ static KernelArgsTy *upgradeKernelArgs(KernelArgsTy *KernelArgs,
+ template <typename TargetAsyncInfoTy>
+ static inline int targetKernel(ident_t *Loc, int64_t DeviceId, int32_t NumTeams,
+                                int32_t ThreadLimit, void *HostPtr,
+-                               KernelArgsTy *KernelArgs) {
++                               KernelArgsTy *KernelArgs,
++                               AsyncInfoTy *ExternalAsyncInfo = nullptr) {
+   assert(PM && "Runtime not initialized");
+   static_assert(std::is_convertible_v<TargetAsyncInfoTy &, AsyncInfoTy &>,
+                 "Target AsyncInfoTy must be convertible to AsyncInfoTy.");
+@@ -428,8 +469,15 @@ static inline int targetKernel(ident_t *Loc, int64_t DeviceId, int32_t NumTeams,
+   if (!DeviceOrErr)
+     FATAL_MESSAGE(DeviceId, "%s", toString(DeviceOrErr.takeError()).c_str());
+ 
+-  TargetAsyncInfoTy TargetAsyncInfo(*DeviceOrErr);
+-  AsyncInfoTy &AsyncInfo = TargetAsyncInfo;
++  // An external async info (see __tgt_target_kernel_async) keeps the launch
++  // in flight; the caller synchronizes it later.
++  std::optional<TargetAsyncInfoTy> OwnedAsyncInfo;
++  if (!ExternalAsyncInfo) {
++    OwnedAsyncInfo.emplace(*DeviceOrErr);
++    AsyncInfoTy &Owned = *OwnedAsyncInfo;
++    ExternalAsyncInfo = &Owned;
++  }
++  AsyncInfoTy &AsyncInfo = *ExternalAsyncInfo;
+   /// RAII to establish tool anchors before and after target region
+   OMPT_IF_BUILT(InterfaceRAII TargetRAII(
+                     RegionInterface.getCallbacks<ompt_target>(), DeviceId,
+@@ -437,6 +485,10 @@ static inline int targetKernel(ident_t *Loc, int64_t DeviceId, int32_t NumTeams,
+ 
+   int Rc = OFFLOAD_SUCCESS;
+   Rc = target(Loc, *DeviceOrErr, HostPtr, *KernelArgs, AsyncInfo);
++  if (!OwnedAsyncInfo) {
++    handleTargetOutcome(Rc == OFFLOAD_SUCCESS, Loc);
++    return Rc == OFFLOAD_SUCCESS ? OMP_TGT_SUCCESS : OMP_TGT_FAIL;
++  }
+   { // required to show synchronization
+     TIMESCOPE_WITH_DETAILS_AND_IDENT("Runtime: synchronize", "", Loc);
+     if (Rc == OFFLOAD_SUCCESS)
+@@ -470,6 +522,32 @@ EXTERN int __tgt_target_kernel(ident_t *Loc, int64_t DeviceId, int32_t NumTeams,
+                                    HostPtr, KernelArgs);
+ }
+ 
++EXTERN int __tgt_target_kernel_async(
++    ident_t *Loc, int64_t DeviceId, int32_t NumTeams, int32_t ThreadLimit,
++    void *HostPtr, KernelArgsTy *KernelArgs,
++    __tgt_async_info_handle *Handle) {
++  OMPT_IF_BUILT(ReturnAddressSetterRAII RA(__builtin_return_address(0)));
++
++  if (!Handle || !KernelArgs) {
++    handleTargetOutcome(false, Loc);
++    return OMP_TGT_FAIL;
++  }
++
++  int64_t ResolvedDeviceId = DeviceId;
++
++  if (checkDevice(ResolvedDeviceId, Loc))
++    return OMP_TGT_FAIL;
++
++  if (ResolvedDeviceId != Handle->DeviceId) {
++    handleTargetOutcome(false, Loc);
++    return OMP_TGT_FAIL;
++  }
++
++  return targetKernel<AsyncInfoTy>(
++      Loc, ResolvedDeviceId, NumTeams, ThreadLimit, HostPtr, KernelArgs,
++      &Handle->AsyncInfo);
++}
++
+ /// Activates the record replay mechanism.
+ /// \param DeviceId The device identifier to execute the target region.
+ /// \param MemorySize The number of bytes to be (pre-)allocated

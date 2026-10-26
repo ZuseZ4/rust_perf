@@ -6,7 +6,7 @@ pub trait KernelBase {
     fn setup(&mut self);
     fn run_kernel(&mut self);
     fn update_checksum(&self) -> f64;
-    fn tear_down(&mut self);
+    fn tear_down(&mut self) -> f64;
 }
 
 #[macro_export]

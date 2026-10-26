@@ -1,0 +1,17 @@
+Kernels run without MPI
+Kernel                   , Variant    , Tuning       ,    Problem size , Checksum   ,    Mean time per rep (sec.) ,    Mean Bandwidth (GiB per sec.) ,    Mean flops (gigaFLOP per sec.)
+Apps_DEL_DOT_VEC_2D      , Base_HIP   , block_256    ,         1000000 , PASSED     ,                 5.64007e-05 ,                          793.663 ,                           957.435
+Apps_DEL_DOT_VEC_2D      , RAJA_HIP   , block_256    ,         1000000 , PASSED     ,                 5.60366e-05 ,                          798.819 ,                           963.656
+Apps_ENERGY              , Base_HIP   , block_256    ,         1000000 , PASSED     ,                 0.000191814 ,                          1048.76 ,                           286.737
+Apps_ENERGY              , RAJA_HIP   , block_256    ,         1000000 , PASSED     ,                 0.000191475 ,                          1050.61 ,                           287.244
+Apps_FIR                 , Base_HIP   , block_256    ,         1000000 , PASSED     ,                 3.89349e-05 ,                          382.726 ,                           821.886
+Apps_FIR                 , RAJA_HIP   , block_256    ,         1000000 , PASSED     ,                 3.89316e-05 ,                          382.758 ,                           821.954
+Apps_LTIMES              , Base_HIP   , block_256    ,          999424 , PASSED     ,                 0.000272554 ,                          48.7083 ,                           183.344
+Apps_LTIMES              , RAJA_HIP   , kernel_256   ,          999424 , PASSED     ,                 0.000322658 ,                          41.1446 ,                           154.874
+Apps_LTIMES              , RAJA_HIP   , launch_256   ,          999424 , PASSED     ,                 0.000272198 ,                          48.7719 ,                           183.584
+Apps_MATVEC_3D_STENCIL   , Base_HIP   , block_256    ,         1000000 , PASSED     ,                 0.000170602 ,                          756.816 ,                           310.665
+Apps_MATVEC_3D_STENCIL   , RAJA_HIP   , block_256    ,         1000000 , PASSED     ,                 0.000176560 ,                          731.278 ,                           300.182
+Apps_PRESSURE            , Base_HIP   , block_256    ,         1000000 , PASSED     ,                 4.31681e-05 ,                          1035.57 ,                           69.4958
+Apps_PRESSURE            , RAJA_HIP   , block_256    ,         1000000 , PASSED     ,                 4.35630e-05 ,                          1026.18 ,                           68.8658
+Apps_VOL3D               , Base_HIP   , block_256    ,         1000000 , PASSED     ,                 6.28120e-05 ,                          527.235 ,                           1264.37
+Apps_VOL3D               , RAJA_HIP   , block_256    ,         1000000 , PASSED     ,                 6.03185e-05 ,                          549.031 ,                           1316.64

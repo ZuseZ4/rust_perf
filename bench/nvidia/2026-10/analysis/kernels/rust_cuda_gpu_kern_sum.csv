@@ -1,0 +1,14 @@
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+21.7,10639046,100,106390.5,106384.5,106304,106688,54.3,_RNvNtNtC9rust_perf4apps6ltimes6ltimes
+17.4,8543109,150,56954.1,56928.0,55552,58240,638.9,_RNvNtNtC9rust_perf4apps17matvec_3d_stencil15matvec3dstencil
+12.2,5996516,750,7995.4,7968.0,7616,8928,212.8,_RNvNtNtC9rust_perf4apps8pressure14pressure_calc2
+8.4,4103682,750,5471.6,5440.0,5248,6400,168.2,_RNvNtNtC9rust_perf4apps8pressure14pressure_calc1
+7.4,3648290,180,20268.3,20032.0,19776,21408,454.4,_RNvNtNtC9rust_perf4apps6energy11energycalc5
+6.1,2970114,150,19800.8,19712.0,17280,20960,420.4,_RNvNtNtC9rust_perf4apps14del_dot_vec_2d14del_dot_vec_2d
+5.8,2863681,180,15909.3,15648.0,15328,17024,546.8,_RNvNtNtC9rust_perf4apps6energy11energycalc3
+5.4,2663777,150,17758.5,17728.0,15392,18592,337.9,_RNvNtNtC9rust_perf4apps5vol3d5vol3d
+5.3,2582565,180,14347.6,14176.0,13984,15552,406.0,_RNvNtNtC9rust_perf4apps6energy11energycalc1
+4.5,2201250,210,10482.1,10464.0,10400,11200,66.8,_RNvNtNtC9rust_perf4apps3fir3fir
+2.4,1182624,180,6570.1,6560.0,6336,6816,91.5,_RNvNtNtC9rust_perf4apps6energy11energycalc4
+1.8,899968,180,4999.8,4992.0,4864,5376,82.3,_RNvNtNtC9rust_perf4apps6energy11energycalc2
+1.6,783104,180,4350.6,4352.0,4288,4576,54.4,_RNvNtNtC9rust_perf4apps6energy11energycalc6
